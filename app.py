@@ -80,6 +80,112 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# NSE CSV Auto-Converter Function
+def auto_convert_nse_csv(raw_df):
+    """
+    Automatically convert NSE CSV to required format
+    Handles real NSE format with CALLS | Strike | PUTS structure
+    """
+    try:
+        st.info("🔄 Detecting NSE CSV structure...")
+        
+        # NSE format: CALLS section | Strike Price (middle) | PUTS section
+        # Find Strike Price column (usually in middle with numeric values)
+        
+        strike_col_idx = None
+        
+        # Method 1: Look for column with "strike" in name
+        for i, col in enumerate(raw_df.columns):
+            col_str = str(col).strip().lower()
+            if 'strike' in col_str:
+                strike_col_idx = i
+                break
+        
+        # Method 2: Find middle column with numeric strike-like values
+        if strike_col_idx is None:
+            for i, col in enumerate(raw_df.columns):
+                try:
+                    sample = pd.to_numeric(raw_df[col].dropna().head(), errors='coerce')
+                    if sample.notna().any() and 10000 < sample.max() < 100000:
+                        strike_col_idx = i
+                        break
+                except:
+                    continue
+        
+        # Method 3: Use middle column
+        if strike_col_idx is None:
+            strike_col_idx = len(raw_df.columns) // 2
+        
+        st.write(f"✓ Strike Price at column {strike_col_idx + 1}")
+        
+        # Find OI columns
+        # CALLS: before strike, PUTS: after strike
+        call_oi_idx = None
+        call_chg_idx = None
+        put_oi_idx = None
+        put_chg_idx = None
+        
+        # Search CALLS section (before strike)
+        for i in range(strike_col_idx - 1, -1, -1):
+            col_lower = str(raw_df.columns[i]).lower()
+            if 'oi' in col_lower:
+                if 'change' not in col_lower and 'chng' not in col_lower and call_oi_idx is None:
+                    call_oi_idx = i
+                elif ('change' in col_lower or 'chng' in col_lower) and call_chg_idx is None:
+                    call_chg_idx = i
+        
+        # Search PUTS section (after strike)
+        for i in range(strike_col_idx + 1, len(raw_df.columns)):
+            col_lower = str(raw_df.columns[i]).lower()
+            if 'oi' in col_lower:
+                if 'change' not in col_lower and 'chng' not in col_lower and put_oi_idx is None:
+                    put_oi_idx = i
+                elif ('change' in col_lower or 'chng' in col_lower) and put_chg_idx is None:
+                    put_chg_idx = i
+        
+        # If still not found, use position-based guessing
+        if call_oi_idx is None:
+            call_oi_idx = max(0, strike_col_idx - 2)
+        if call_chg_idx is None:
+            call_chg_idx = max(0, strike_col_idx - 3)
+        if put_oi_idx is None:
+            put_oi_idx = min(len(raw_df.columns) - 1, strike_col_idx + 2)
+        if put_chg_idx is None:
+            put_chg_idx = min(len(raw_df.columns) - 1, strike_col_idx + 3)
+        
+        st.write(f"✓ Call OI at column {call_oi_idx + 1}")
+        st.write(f"✓ Put OI at column {put_oi_idx + 1}")
+        
+        # Create clean DataFrame
+        clean_df = pd.DataFrame()
+        clean_df['Strike Price'] = pd.to_numeric(raw_df.iloc[:, strike_col_idx], errors='coerce')
+        clean_df['Call OI'] = pd.to_numeric(raw_df.iloc[:, call_oi_idx], errors='coerce').fillna(0)
+        clean_df['Call OI Change'] = pd.to_numeric(raw_df.iloc[:, call_chg_idx], errors='coerce').fillna(0)
+        clean_df['Put OI'] = pd.to_numeric(raw_df.iloc[:, put_oi_idx], errors='coerce').fillna(0)
+        clean_df['Put OI Change'] = pd.to_numeric(raw_df.iloc[:, put_chg_idx], errors='coerce').fillna(0)
+        
+        # Clean
+        clean_df = clean_df.dropna(subset=['Strike Price'])
+        clean_df = clean_df[(clean_df['Call OI'] > 0) | (clean_df['Put OI'] > 0)]
+        
+        st.success(f"✅ Converted successfully! Found {len(clean_df)} strikes")
+        
+        # Show summary
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Strikes", len(clean_df))
+        with col2:
+            st.metric("Call OI", f"{clean_df['Call OI'].sum():,.0f}")
+        with col3:
+            st.metric("Put OI", f"{clean_df['Put OI'].sum():,.0f}")
+        
+        return clean_df
+        
+    except Exception as e:
+        st.error(f"❌ Auto-conversion failed: {e}")
+        st.info("💡 Try using the standalone converter script or check CSV format")
+        return None
+
 # Signal Engine Class
 class OptionChainAnalyzer:
     def __init__(self, df):
@@ -327,19 +433,58 @@ def main():
         return
     
     try:
-        df = pd.read_csv(uploaded_file)
+        # Try to read raw CSV
+        raw_df = pd.read_csv(uploaded_file)
         
+        # Check if already in correct format
         required_columns = ['Strike Price', 'Call OI', 'Put OI']
-        missing_cols = [col for col in required_columns if col not in df.columns]
+        columns_lower = [col.strip().lower() for col in raw_df.columns]
         
-        if missing_cols:
-            st.error(f"❌ Missing columns: {', '.join(missing_cols)}")
-            return
+        needs_conversion = not all(
+            any(req.lower() in col for col in columns_lower) 
+            for req in required_columns
+        )
         
+        if needs_conversion:
+            # Auto-convert NSE format
+            st.info("🔄 Converting NSE CSV format to analysis format...")
+            df = auto_convert_nse_csv(raw_df)
+            if df is None:
+                st.error("❌ Unable to convert CSV. Please check format.")
+                st.info("💡 Expected columns: Strike Price, Call OI, Put OI (and optionally Call/Put OI Change)")
+                return
+        else:
+            df = raw_df
+            # Standardize column names
+            col_mapping = {}
+            for col in df.columns:
+                col_lower = col.strip().lower()
+                if 'strike' in col_lower and 'price' in col_lower:
+                    col_mapping[col] = 'Strike Price'
+                elif col_lower == 'strike':
+                    col_mapping[col] = 'Strike Price'
+                elif 'call' in col_lower and 'oi' in col_lower and 'change' not in col_lower:
+                    col_mapping[col] = 'Call OI'
+                elif 'call' in col_lower and 'change' in col_lower:
+                    col_mapping[col] = 'Call OI Change'
+                elif 'put' in col_lower and 'oi' in col_lower and 'change' not in col_lower:
+                    col_mapping[col] = 'Put OI'
+                elif 'put' in col_lower and 'change' in col_lower:
+                    col_mapping[col] = 'Put OI Change'
+            df = df.rename(columns=col_mapping)
+        
+        # Ensure OI Change columns exist
         if 'Call OI Change' not in df.columns:
             df['Call OI Change'] = 0
         if 'Put OI Change' not in df.columns:
             df['Put OI Change'] = 0
+        
+        # Clean data
+        df = df.dropna(subset=['Strike Price'])
+        for col in ['Strike Price', 'Call OI', 'Put OI', 'Call OI Change', 'Put OI Change']:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        df = df[(df['Call OI'] > 0) | (df['Put OI'] > 0)]
+        df = df.sort_values('Strike Price').reset_index(drop=True)
         
         # Initialize Analyzer
         analyzer = OptionChainAnalyzer(df)
