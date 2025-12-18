@@ -14,8 +14,8 @@ except ImportError:
 
 # Page Configuration
 st.set_page_config(
-    page_title="Option Chain Analyzer - Buyer's Edge",
-    page_icon="📊",
+    page_title="Option Chain Analyzer - AstroQuant Pro",
+    page_icon="🌀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -38,10 +38,6 @@ def convert_csv_to_standard_format(raw_df):
     """
     Intelligent converter that detects CSV format and converts to standard format:
     Strike Price | Call OI | Call OI Change | Put OI | Put OI Change
-    
-    Handles:
-    1. Pre-formatted CSV (from convert_nse.py script)
-    2. Raw NSE CSV (CALLS/PUTS header format)
     """
     try:
         with st.expander("🔄 CSV Conversion Details", expanded=False):
@@ -56,7 +52,6 @@ def convert_csv_to_standard_format(raw_df):
         
         if expected_cols.issubset(actual_cols):
             st.success("✅ CSV already in correct format!")
-            # Just ensure proper column order and data types
             clean_df = raw_df[['Strike Price', 'Call OI', 'Call OI Change', 'Put OI', 'Put OI Change']].copy()
             for col in clean_df.columns:
                 clean_df[col] = pd.to_numeric(clean_df[col], errors='coerce')
@@ -140,6 +135,90 @@ def convert_csv_to_standard_format(raw_df):
         return None
 
 # ============================================================================
+# SARVATOBHADRA CHAKRA MODULE
+# ============================================================================
+
+NAKSHATRAS = [
+    "Ashwini", "Bharani", "Krittika", "Rohini", "Mrigasira",
+    "Ardra", "Punarvasu", "Pushya", "Aslesha", "Magha",
+    "Purva Phalguni", "Uttara Phalguni", "Hasta", "Chitra", "Svati",
+    "Visakha", "Anuradha", "Jyestha", "Mula", "Purva Ashadha",
+    "Uttara Ashadha", "Sravana", "Dhanistha", "Shatabhisha",
+    "Purva Bhadrapada", "Uttara Bhadrapada", "Revati", "Abhijit"
+]
+
+BENIGN_NAKSHATRAS = {"Pushya", "Hasta", "Chitra", "Anuradha", "Sravana", "Revati", "Ashwini", "Magha", "Uttara Phalguni"}
+MALEFIC_NAKSHATRAS = {"Krittika", "Ardra", "Aslesha", "Jyestha", "Mula", "Shatabhisha", "Bharani", "Svati"}
+
+def get_market_nakshatra(price):
+    """Convert market price to nakshatra"""
+    reduced_value = int(price / 100)
+    nakshatra_idx = reduced_value % 28
+    return NAKSHATRAS[nakshatra_idx]
+
+def get_tithi_info():
+    """Get tithi based on lunar calendar"""
+    day_of_month = datetime.now().day
+    tithi = ((day_of_month - 1) % 30) + 1
+    
+    tithi_types = {
+        'Nanda': [1, 6, 11, 16, 21, 26],
+        'Bhadra': [2, 7, 12, 17, 22, 27],
+        'Jaya': [3, 8, 13, 18, 23, 28],
+        'Rikta': [4, 9, 14, 19, 24, 29],
+        'Poorna': [5, 10, 15, 20, 25, 30]
+    }
+    
+    for name, tithis in tithi_types.items():
+        if tithi in tithis:
+            return name, tithi
+    return "Unknown", tithi
+
+def get_sbc_signal(spot_price, max_pain, signal_result):
+    """Generate SBC-based signal"""
+    market_nak = get_market_nakshatra(spot_price)
+    max_pain_nak = get_market_nakshatra(max_pain)
+    tithi_name, tithi_num = get_tithi_info()
+    
+    # Calculate vedha positions
+    current_nak_idx = NAKSHATRAS.index(market_nak)
+    support_idx = (current_nak_idx - 7) % 28
+    resistance_idx = (current_nak_idx + 7) % 28
+    
+    support_nak = NAKSHATRAS[support_idx]
+    resistance_nak = NAKSHATRAS[resistance_idx]
+    
+    # Determine combined signal
+    oi_signal = signal_result['signal']
+    
+    if tithi_name == "Nanda" and oi_signal == "BUY":
+        combined = "🟢 STRONG BUY"
+        confidence_boost = 25
+    elif tithi_name == "Rikta":
+        combined = "🔴 AVOID (Rikta Phase)"
+        confidence_boost = -40
+    elif tithi_name == "Bhadra":
+        combined = "🟡 RANGE-BOUND"
+        confidence_boost = -15
+    else:
+        combined = "🟡 NEUTRAL"
+        confidence_boost = 0
+    
+    final_confidence = min(95, max(0, signal_result['confidence'] + confidence_boost))
+    
+    return {
+        'market_nakshatra': market_nak,
+        'max_pain_nakshatra': max_pain_nak,
+        'support_nakshatra': support_nak,
+        'resistance_nakshatra': resistance_nak,
+        'tithi_name': tithi_name,
+        'tithi_num': tithi_num,
+        'combined_signal': combined,
+        'final_confidence': final_confidence,
+        'nak_quality': 'Benign' if market_nak in BENIGN_NAKSHATRAS else ('Malefic' if market_nak in MALEFIC_NAKSHATRAS else 'Neutral')
+    }
+
+# ============================================================================
 # SIGNAL ENGINE CLASS - ENHANCED
 # ============================================================================
 class OptionChainAnalyzer:
@@ -211,10 +290,7 @@ class OptionChainAnalyzer:
         return support, resistance
     
     def get_oi_concentration(self):
-        """Calculate OI concentration - where market makers have built positions"""
-        total_call_oi = self.df['Call OI'].sum()
-        total_put_oi = self.df['Put OI'].sum()
-        
+        """Calculate OI concentration zones"""
         call_concentration = self.df.nlargest(3, 'Call OI')[['Strike Price', 'Call OI']]
         put_concentration = self.df.nlargest(3, 'Put OI')[['Strike Price', 'Put OI']]
         
@@ -376,7 +452,8 @@ class OptionChainAnalyzer:
 # MAIN APPLICATION
 # ============================================================================
 def main():
-    st.title("📊 Option Chain Analyzer - Buyer's Edge")
+    st.title("🌀 AstroQuant Pro - Option Chain Analyzer")
+    st.markdown("*Combining OI Analysis + Sarvatobhadra Chakra for Options Trading*")
     st.markdown("---")
     
     with st.sidebar:
@@ -445,17 +522,22 @@ def main():
         
         st.markdown("---")
         
-        # ========== ENHANCED ANALYSIS TABS ==========
-        tab1, tab2, tab3, tab4 = st.tabs(["🎯 Signal", "📊 Market Structure", "🔍 OI Analysis", "📋 Data"])
+        # ========== ANALYSIS TABS ==========
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+            "🎯 Signal", 
+            "📊 Market Structure", 
+            "🔍 OI Analysis", 
+            "📋 Data",
+            "🌀 Sarvatobhadra",
+            "💡 Combined Strategy"
+        ])
+        
+        # Generate signals
+        signal_result = analyzer.generate_signal()
+        sbc_signal = get_sbc_signal(spot_price, analyzer.max_pain, signal_result)
         
         with tab1:
-            signal_result = analyzer.generate_signal()
-            
-            signal_colors = {
-                "BUY": "🟢",
-                "WAIT": "🟡",
-                "AVOID": "🔴"
-            }
+            signal_colors = {"BUY": "🟢", "WAIT": "🟡", "AVOID": "🔴"}
             
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -512,7 +594,6 @@ def main():
                 st.write("**Top Put OI Strikes**")
                 st.dataframe(put_conc, use_container_width=True, hide_index=True)
             
-            # Chart: OI Distribution
             if PLOTLY_AVAILABLE:
                 st.markdown("---")
                 fig = go.Figure()
@@ -553,6 +634,92 @@ def main():
                 file_name=f"analysis_{expiry.replace('-', '')}.csv",
                 mime="text/csv"
             )
+        
+        with tab5:
+            st.subheader("🌀 Sarvatobhadra Chakra Analysis")
+            st.markdown("*Vedic Astrology Market Timing & Strike Selection*")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Market Nakshatra", sbc_signal['market_nakshatra'])
+            with col2:
+                st.metric("Max Pain Nakshatra", sbc_signal['max_pain_nakshatra'])
+            with col3:
+                st.metric("Tithi", f"{sbc_signal['tithi_name']} ({sbc_signal['tithi_num']})")
+            with col4:
+                weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                st.metric("Day (Vara)", weekday_names[datetime.now().weekday()])
+            
+            st.markdown("---")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Nakshatra Quality:**")
+                if sbc_signal['nak_quality'] == 'Benign':
+                    st.success(f"✅ {sbc_signal['market_nakshatra']} is BENIGN")
+                    st.write("- Favorable for buying")
+                elif sbc_signal['nak_quality'] == 'Malefic':
+                    st.error(f"⚠️ {sbc_signal['market_nakshatra']} is CHALLENGING")
+                    st.write("- Caution advised")
+                else:
+                    st.info(f"~ {sbc_signal['market_nakshatra']} is NEUTRAL")
+            
+            with col2:
+                st.write("**Tithi Phase:**")
+                if sbc_signal['tithi_name'] == "Nanda":
+                    st.success("✅ Growth Phase (Favorable)")
+                elif sbc_signal['tithi_name'] == "Rikta":
+                    st.error("⚠️ Loss Phase (AVOID)")
+                else:
+                    st.info(f"~ {sbc_signal['tithi_name']} Phase")
+            
+            st.markdown("---")
+            
+            st.subheader("🎯 SBC-Based Support/Resistance")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric("Support Nakshatra", sbc_signal['support_nakshatra'])
+            
+            with col2:
+                st.metric("Resistance Nakshatra", sbc_signal['resistance_nakshatra'])
+        
+        with tab6:
+            st.subheader("💡 Combined OI + SBC Strategy")
+            st.markdown("*Best of Both Worlds: Technical OI Analysis + Vedic Astrology*")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**OI Signal:**")
+                st.info(f"{signal_result['signal']} ({signal_result['confidence']:.0f}% confidence)")
+            
+            with col2:
+                st.write("**SBC Signal:**")
+                st.success(sbc_signal['combined_signal'])
+            
+            st.markdown("---")
+            
+            st.metric("Final Recommendation", sbc_signal['combined_signal'])
+            st.metric("Final Confidence (Combined)", f"{sbc_signal['final_confidence']:.0f}%")
+            
+            st.markdown("---")
+            
+            st.success("""
+            **🎯 TRADE SETUP RECOMMENDATION:**
+            
+            1. **Entry Signal:** Based on OI analysis (Tab 1)
+            2. **Strike Selection:** Based on SBC nakshatras (Tab 5)
+            3. **Timing:** Optimized by Tithi phase (Tab 5)
+            4. **Confidence:** Combined OI + SBC verification
+            5. **Stop Loss:** Support level from SBC
+            6. **Target:** Resistance level from SBC
+            
+            ✅ Use this combined approach for higher probability trades!
+            """)
     else:
         st.info("👈 Please upload a CSV file and click 'Analyze' to get started")
 
