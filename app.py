@@ -84,7 +84,7 @@ st.markdown("""
 def auto_convert_nse_csv(raw_df):
     """
     Automatically convert NSE CSV to required format
-    Handles real NSE format with CALLS | Strike | PUTS structure
+    Handles both simple and multi-level NSE CSV formats
     """
     try:
         with st.expander("🔄 CSV Conversion Details", expanded=True):
@@ -98,6 +98,11 @@ def auto_convert_nse_csv(raw_df):
                 st.text(f"{i+1}. {col}")
             if len(raw_df.columns) > 5:
                 st.text(f"... and {len(raw_df.columns) - 5} more columns")
+            
+            # Check if this is a multi-level CSV (NSE's nested format)
+            if len(raw_df.columns) <= 5:
+                st.info("📋 Detected NSE multi-level format (CALLS/PUTS sections)")
+                return auto_convert_multilevel_nse(raw_df)
         
         # Find Strike Price column
         strike_col_idx = None
@@ -223,6 +228,172 @@ def auto_convert_nse_csv(raw_df):
     except Exception as e:
         st.error(f"❌ Conversion error: {str(e)}")
         st.info("💡 Please use the standalone converter script or ensure your CSV is from NSE website")
+        return None
+
+def auto_convert_multilevel_nse(raw_df):
+    """
+    Convert NSE CSV with multi-level headers
+    Format: CALLS | Strike | PUTS (with sub-columns under each)
+    """
+    try:
+        # Read with multi-level header
+        st.info("🔄 Processing multi-level CSV format...")
+        
+        # Re-read the uploaded file with header=[0,1] to get sub-columns
+        # For now, we'll work with the flattened version
+        
+        # The CSV likely has this structure:
+        # Row 0: CALLS, Unnamed, PUTS (main headers)
+        # Row 1: Sub-columns under each
+        
+        # Strategy: Read again skipping first row to get actual column names
+        # But we don't have access to the file object here
+        
+        # Alternative: Parse the existing dataframe intelligently
+        # Assume structure is: Multiple CALL columns | Strike | Multiple PUT columns
+        
+        # Find Strike column - it should have numeric values in strike price range
+        strike_col_idx = None
+        strike_col_name = None
+        
+        for i, col in enumerate(raw_df.columns):
+            try:
+                # Try to convert column to numeric
+                test_values = pd.to_numeric(raw_df[col], errors='coerce').dropna()
+                
+                if len(test_values) > 0:
+                    # Check if values look like strike prices (typically 10000-100000 range)
+                    min_val = test_values.min()
+                    max_val = test_values.max()
+                    
+                    # Strike prices are usually large numbers
+                    if min_val > 1000 and max_val > min_val and max_val < 1000000:
+                        # Check if the range makes sense for strikes
+                        value_range = max_val - min_val
+                        if 1000 < value_range < 100000:  # Reasonable strike range
+                            strike_col_idx = i
+                            strike_col_name = col
+                            break
+            except:
+                continue
+        
+        if strike_col_idx is None:
+            st.error("❌ Could not identify Strike Price column")
+            st.write("**Available columns:**", list(raw_df.columns))
+            st.write("**Sample data from each column:**")
+            for col in raw_df.columns:
+                st.write(f"{col}: {raw_df[col].head(3).tolist()}")
+            return None
+        
+        st.success(f"✓ Strike Price found at column {strike_col_idx + 1}: '{strike_col_name}'")
+        
+        # Now we need to identify OI columns
+        # In multi-level format, CALLS section is before strike, PUTS after
+        
+        # Get all columns before strike (CALLS section)
+        calls_cols = list(range(0, strike_col_idx))
+        # Get all columns after strike (PUTS section)
+        puts_cols = list(range(strike_col_idx + 1, len(raw_df.columns)))
+        
+        st.write(f"CALLS section: columns {calls_cols}")
+        st.write(f"PUTS section: columns {puts_cols}")
+        
+        # Find OI columns by looking for numeric data with large values
+        call_oi_idx = None
+        call_chg_idx = None
+        put_oi_idx = None
+        put_chg_idx = None
+        
+        # Search CALLS section for OI
+        for idx in calls_cols:
+            try:
+                col_data = pd.to_numeric(raw_df.iloc[:, idx], errors='coerce')
+                if col_data.notna().sum() > len(raw_df) * 0.5:  # At least 50% valid data
+                    max_val = col_data.max()
+                    if max_val > 1000:  # OI values are typically large
+                        if call_oi_idx is None:
+                            call_oi_idx = idx
+                            st.write(f"✓ Call OI candidate at column {idx+1}: max={max_val:,.0f}")
+                        elif call_chg_idx is None and max_val < col_data.abs().quantile(0.95) * 10:
+                            # Change values are typically smaller
+                            call_chg_idx = idx
+            except:
+                continue
+        
+        # Search PUTS section for OI
+        for idx in puts_cols:
+            try:
+                col_data = pd.to_numeric(raw_df.iloc[:, idx], errors='coerce')
+                if col_data.notna().sum() > len(raw_df) * 0.5:
+                    max_val = col_data.max()
+                    if max_val > 1000:
+                        if put_oi_idx is None:
+                            put_oi_idx = idx
+                            st.write(f"✓ Put OI candidate at column {idx+1}: max={max_val:,.0f}")
+                        elif put_chg_idx is None and max_val < col_data.abs().quantile(0.95) * 10:
+                            put_chg_idx = idx
+            except:
+                continue
+        
+        # Fallback: Use first numeric column in each section
+        if call_oi_idx is None and len(calls_cols) > 0:
+            call_oi_idx = calls_cols[-1]  # Last column before strike
+            st.warning(f"⚠️ Using fallback for Call OI: column {call_oi_idx+1}")
+        
+        if put_oi_idx is None and len(puts_cols) > 0:
+            put_oi_idx = puts_cols[0]  # First column after strike
+            st.warning(f"⚠️ Using fallback for Put OI: column {put_oi_idx+1}")
+        
+        if call_oi_idx is None or put_oi_idx is None:
+            st.error("❌ Could not identify OI columns")
+            return None
+        
+        # Create clean DataFrame
+        clean_df = pd.DataFrame()
+        
+        clean_df['Strike Price'] = pd.to_numeric(raw_df.iloc[:, strike_col_idx], errors='coerce')
+        clean_df['Call OI'] = pd.to_numeric(raw_df.iloc[:, call_oi_idx], errors='coerce').fillna(0)
+        clean_df['Call OI Change'] = pd.to_numeric(
+            raw_df.iloc[:, call_chg_idx] if call_chg_idx is not None else 0,
+            errors='coerce'
+        ).fillna(0)
+        clean_df['Put OI'] = pd.to_numeric(raw_df.iloc[:, put_oi_idx], errors='coerce').fillna(0)
+        clean_df['Put OI Change'] = pd.to_numeric(
+            raw_df.iloc[:, put_chg_idx] if put_chg_idx is not None else 0,
+            errors='coerce'
+        ).fillna(0)
+        
+        # Clean data
+        clean_df = clean_df.dropna(subset=['Strike Price'])
+        clean_df = clean_df[clean_df['Strike Price'] > 1000]  # Valid strikes only
+        clean_df = clean_df[(clean_df['Call OI'] > 0) | (clean_df['Put OI'] > 0)]
+        clean_df = clean_df.sort_values('Strike Price').reset_index(drop=True)
+        
+        if len(clean_df) == 0:
+            st.error("❌ No valid data after conversion")
+            return None
+        
+        st.success(f"✅ Conversion successful! Found {len(clean_df)} valid strikes")
+        
+        # Show summary
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Strikes", len(clean_df))
+        with col2:
+            st.metric("Total Call OI", f"{clean_df['Call OI'].sum():,.0f}")
+        with col3:
+            st.metric("Total Put OI", f"{clean_df['Put OI'].sum():,.0f}")
+        
+        # Show PCR
+        pcr = clean_df['Put OI'].sum() / clean_df['Call OI'].sum() if clean_df['Call OI'].sum() > 0 else 0
+        st.info(f"📊 PCR: {pcr:.2f}")
+        
+        return clean_df
+        
+    except Exception as e:
+        st.error(f"❌ Multi-level conversion error: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
         return None
 
 # Signal Engine Class
@@ -433,15 +604,53 @@ def main():
         st.info("👆 Upload NSE Option Chain CSV to begin")
         
         st.markdown("---")
-        st.markdown("### 📋 Expected CSV Format")
-        st.write("Your NSE CSV should have CALLS section, Strike Price, and PUTS section")
-        st.write("The app will automatically detect and convert the format!")
+        st.markdown("### 📋 CSV Format Guide")
+        
+        st.markdown("""
+        **NSE CSV Format Detection:**
+        - ✅ Automatically handles multi-level NSE format
+        - ✅ Detects CALLS | Strike | PUTS structure
+        - ✅ Finds OI columns intelligently
+        
+        **If auto-detection fails:**
+        1. Download CSV from NSE
+        2. Open in Excel/Google Sheets
+        3. Look for these columns:
+           - Strike Price (middle column, has values like 48000, 48100...)
+           - Call OI (before strike, large numbers)
+           - Put OI (after strike, large numbers)
+        4. Save just those columns as new CSV
+        """)
+        
+        # Show example
+        with st.expander("📊 Example Format"):
+            example_df = pd.DataFrame({
+                'Strike Price': [48000, 48100, 48200, 48300],
+                'Call OI': [150000, 200000, 180000, 120000],
+                'Call OI Change': [-5000, 15000, 20000, -3000],
+                'Put OI': [80000, 120000, 180000, 200000],
+                'Put OI Change': [2000, -3000, 20000, 15000],
+            })
+            st.dataframe(example_df, use_container_width=True)
         
         return
     
     try:
         # Read CSV
         raw_df = pd.read_csv(uploaded_file)
+        
+        # Show diagnostic info
+        with st.expander("🔍 CSV Diagnostic Info"):
+            st.write("**File Info:**")
+            st.write(f"- Rows: {len(raw_df)}")
+            st.write(f"- Columns: {len(raw_df.columns)}")
+            
+            st.write("\n**Column Names:**")
+            for i, col in enumerate(raw_df.columns):
+                st.text(f"{i+1}. {col}")
+            
+            st.write("\n**First 3 Rows (Raw Data):**")
+            st.dataframe(raw_df.head(3), use_container_width=True)
         
         # Auto-convert NSE format
         st.markdown("### 🔄 Converting NSE CSV...")
