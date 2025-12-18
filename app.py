@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-# Try importing plotly, but gracefully handle if not available
+# Try importing plotly
 try:
     import plotly.graph_objects as go
     import plotly.express as px
@@ -23,185 +23,106 @@ st.set_page_config(
 # Custom CSS
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: 800;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-align: center;
-        margin-bottom: 1rem;
-    }
-    
-    .buy-signal {
-        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-        color: white;
-        font-size: 1.8rem;
-        font-weight: bold;
-        text-align: center;
-        padding: 30px;
-        border-radius: 15px;
-        margin: 20px 0;
-        box-shadow: 0 8px 16px rgba(17, 153, 142, 0.3);
-    }
-    
-    .wait-signal {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        color: white;
-        font-size: 1.8rem;
-        font-weight: bold;
-        text-align: center;
-        padding: 30px;
-        border-radius: 15px;
-        margin: 20px 0;
-        box-shadow: 0 8px 16px rgba(245, 87, 108, 0.3);
-    }
-    
-    .avoid-signal {
-        background: linear-gradient(135deg, #ee0979 0%, #ff6a00 100%);
-        color: white;
-        font-size: 1.8rem;
-        font-weight: bold;
-        text-align: center;
-        padding: 30px;
-        border-radius: 15px;
-        margin: 20px 0;
-        box-shadow: 0 8px 16px rgba(238, 9, 121, 0.3);
-    }
-    
-    .glow-effect {
-        animation: glow 2s ease-in-out infinite alternate;
-    }
-    
-    @keyframes glow {
-        from { box-shadow: 0 0 5px #fff, 0 0 10px #fff, 0 0 15px #667eea; }
-        to { box-shadow: 0 0 10px #fff, 0 0 20px #667eea, 0 0 30px #667eea; }
-    }
+    .signal-buy { color: #00ff41; font-weight: bold; font-size: 24px; }
+    .signal-wait { color: #ffd700; font-weight: bold; font-size: 24px; }
+    .signal-avoid { color: #ff6b6b; font-weight: bold; font-size: 24px; }
+    .metric-box { padding: 20px; border-radius: 10px; background-color: #f0f2f6; margin: 10px 0; }
 </style>
 """, unsafe_allow_html=True)
 
-# NSE CSV Auto-Converter Function
-def auto_convert_nse_csv(raw_df):
+# ============================================================================
+# SIMPLIFIED CSV CONVERTER - Handles both formatted and raw NSE CSVs
+# ============================================================================
+def convert_csv_to_standard_format(raw_df):
     """
-    Automatically convert NSE CSV to required format
-    Handles both simple and multi-level NSE CSV formats
+    Intelligent converter that detects CSV format and converts to standard format:
+    Strike Price | Call OI | Call OI Change | Put OI | Put OI Change
+    
+    Handles:
+    1. Pre-formatted CSV (from convert_nse.py script)
+    2. Raw NSE CSV (CALLS/PUTS header format)
     """
     try:
-        with st.expander("🔄 CSV Conversion Details", expanded=True):
-            st.write("**Original CSV Structure:**")
-            st.write(f"Total columns: {len(raw_df.columns)}")
-            st.write(f"Total rows: {len(raw_df)}")
-            
-            # Show first few column names
+        with st.expander("🔄 CSV Conversion Details", expanded=False):
+            st.write(f"**Total columns found:** {len(raw_df.columns)}")
+            st.write(f"**Total rows:** {len(raw_df)}")
             st.write("**Column names:**")
-            for i, col in enumerate(raw_df.columns[:min(5, len(raw_df.columns))]):
-                st.text(f"{i+1}. {col}")
-            if len(raw_df.columns) > 5:
-                st.text(f"... and {len(raw_df.columns) - 5} more columns")
+            st.write(list(raw_df.columns))
+        
+        # ===== METHOD 1: Check if already in formatted format =====
+        expected_cols = {'Strike Price', 'Call OI', 'Call OI Change', 'Put OI', 'Put OI Change'}
+        actual_cols = set(raw_df.columns)
+        
+        if expected_cols.issubset(actual_cols):
+            st.success("✅ CSV already in correct format!")
+            # Just ensure proper column order and data types
+            clean_df = raw_df[['Strike Price', 'Call OI', 'Call OI Change', 'Put OI', 'Put OI Change']].copy()
+            for col in clean_df.columns:
+                clean_df[col] = pd.to_numeric(clean_df[col], errors='coerce')
+            clean_df = clean_df.dropna(subset=['Strike Price'])
+            return clean_df
+        
+        # ===== METHOD 2: Detect and convert raw NSE format =====
+        st.info("Converting from raw NSE format...")
+        
+        # Strategy: Look for columns with 5 numeric fields (typical NSE structure after header=1)
+        # The columns should be: OI, Change OI (for calls), Strike, OI, Change OI (for puts)
+        
+        if len(raw_df.columns) >= 5:
+            # Try to find strike column (usually in the middle or named "STRIKE")
+            strike_col_idx = None
             
-            # Check if this is a multi-level CSV (NSE's nested format)
-            if len(raw_df.columns) <= 5:
-                st.info("📋 Detected NSE multi-level format (CALLS/PUTS sections)")
-                return auto_convert_multilevel_nse(raw_df)
-        
-        # Find Strike Price column
-        strike_col_idx = None
-        
-        # Method 1: Look for "strike" in column name
-        for i, col in enumerate(raw_df.columns):
-            if 'strike' in str(col).lower():
-                strike_col_idx = i
-                break
-        
-        # Method 2: Find column with numeric values that look like strikes
-        if strike_col_idx is None:
+            # Check for "STRIKE" keyword first
             for i, col in enumerate(raw_df.columns):
-                try:
-                    # Convert to numeric and check if values are in strike price range
-                    sample = pd.to_numeric(raw_df[col].dropna().head(10), errors='coerce')
-                    if sample.notna().any():
-                        # Check if values are in typical strike range (10000-100000)
-                        if 10000 < sample.max() < 100000 and sample.min() > 1000:
-                            strike_col_idx = i
-                            break
-                except:
-                    continue
-        
-        # Method 3: Use middle column as fallback
-        if strike_col_idx is None:
-            strike_col_idx = len(raw_df.columns) // 2
-        
-        st.success(f"✓ Strike Price detected at column {strike_col_idx + 1}: '{raw_df.columns[strike_col_idx]}'")
-        
-        # Find OI columns
-        # CALLS section: before strike
-        # PUTS section: after strike
-        
-        call_oi_idx = None
-        call_chg_idx = None
-        put_oi_idx = None
-        put_chg_idx = None
-        
-        # Search CALLS section (columns before strike)
-        for i in range(strike_col_idx - 1, max(-1, strike_col_idx - 10), -1):
-            if i < 0:
-                break
-            col_lower = str(raw_df.columns[i]).lower()
+                if 'strike' in str(col).lower():
+                    strike_col_idx = i
+                    break
             
-            # Look for OI column (not change)
-            if 'oi' in col_lower or 'open interest' in col_lower:
-                if 'change' not in col_lower and 'chng' not in col_lower and call_oi_idx is None:
-                    # Verify it has numeric data
+            # If not found, look for column with values in strike price range
+            if strike_col_idx is None:
+                for i, col in enumerate(raw_df.columns):
                     try:
-                        test_data = pd.to_numeric(raw_df.iloc[:, i].dropna().head(), errors='coerce')
-                        if test_data.notna().any() and test_data.max() > 100:
-                            call_oi_idx = i
+                        numeric_vals = pd.to_numeric(raw_df[col], errors='coerce').dropna()
+                        if len(numeric_vals) > 0:
+                            if 40000 < numeric_vals.median() < 60000:  # Typical strike range for Bank Nifty
+                                strike_col_idx = i
+                                break
                     except:
-                        pass
-                elif ('change' in col_lower or 'chng' in col_lower) and call_chg_idx is None:
-                    call_chg_idx = i
-        
-        # Search PUTS section (columns after strike)
-        for i in range(strike_col_idx + 1, min(len(raw_df.columns), strike_col_idx + 10)):
-            col_lower = str(raw_df.columns[i]).lower()
+                        continue
             
-            if 'oi' in col_lower or 'open interest' in col_lower:
-                if 'change' not in col_lower and 'chng' not in col_lower and put_oi_idx is None:
-                    try:
-                        test_data = pd.to_numeric(raw_df.iloc[:, i].dropna().head(), errors='coerce')
-                        if test_data.notna().any() and test_data.max() > 100:
-                            put_oi_idx = i
-                    except:
-                        pass
-                elif ('change' in col_lower or 'chng' in col_lower) and put_chg_idx is None:
-                    put_chg_idx = i
-        
-        # Fallback to position-based detection if not found
-        if call_oi_idx is None:
-            # Typically OI is 2-3 columns before strike in NSE format
-            call_oi_idx = max(0, strike_col_idx - 2)
-        
-        if put_oi_idx is None:
-            # Typically OI is 2-3 columns after strike
-            put_oi_idx = min(len(raw_df.columns) - 1, strike_col_idx + 2)
-        
-        if call_chg_idx is None:
-            call_chg_idx = max(0, strike_col_idx - 3)
-        
-        if put_chg_idx is None:
-            put_chg_idx = min(len(raw_df.columns) - 1, strike_col_idx + 3)
-        
-        st.info(f"✓ Call OI at column {call_oi_idx + 1}: '{raw_df.columns[call_oi_idx]}'")
-        st.info(f"✓ Put OI at column {put_oi_idx + 1}: '{raw_df.columns[put_oi_idx]}'")
-        
-        # Create clean DataFrame
-        clean_df = pd.DataFrame()
-        
-        clean_df['Strike Price'] = pd.to_numeric(raw_df.iloc[:, strike_col_idx], errors='coerce')
-        clean_df['Call OI'] = pd.to_numeric(raw_df.iloc[:, call_oi_idx], errors='coerce').fillna(0)
-        clean_df['Call OI Change'] = pd.to_numeric(raw_df.iloc[:, call_chg_idx], errors='coerce').fillna(0)
-        clean_df['Put OI'] = pd.to_numeric(raw_df.iloc[:, put_oi_idx], errors='coerce').fillna(0)
-        clean_df['Put OI Change'] = pd.to_numeric(raw_df.iloc[:, put_chg_idx], errors='coerce').fillna(0)
+            # If still not found, assume middle column is strike
+            if strike_col_idx is None:
+                strike_col_idx = len(raw_df.columns) // 2
+            
+            st.success(f"✓ Strike Price at column {strike_col_idx + 1}")
+            
+            # Build output dataframe using column positions
+            # Assuming format: Call OI | Call Change | Strike | Put Change | Put OI
+            # OR: Call OI | Call Change | Strike | Put OI | Put Change (check both patterns)
+            
+            clean_df = pd.DataFrame()
+            clean_df['Strike Price'] = pd.to_numeric(raw_df.iloc[:, strike_col_idx], errors='coerce')
+            
+            # Try to assign Call OI and Call Change (usually 2 columns before strike)
+            if strike_col_idx >= 2:
+                clean_df['Call OI'] = pd.to_numeric(raw_df.iloc[:, strike_col_idx - 2], errors='coerce').fillna(0)
+                clean_df['Call OI Change'] = pd.to_numeric(raw_df.iloc[:, strike_col_idx - 1], errors='coerce').fillna(0)
+            else:
+                clean_df['Call OI'] = 0
+                clean_df['Call OI Change'] = 0
+            
+            # Try to assign Put OI and Put Change (usually after strike)
+            if strike_col_idx + 2 < len(raw_df.columns):
+                clean_df['Put OI'] = pd.to_numeric(raw_df.iloc[:, strike_col_idx + 1], errors='coerce').fillna(0)
+                clean_df['Put OI Change'] = pd.to_numeric(raw_df.iloc[:, strike_col_idx + 2], errors='coerce').fillna(0)
+            else:
+                clean_df['Put OI'] = 0
+                clean_df['Put OI Change'] = 0
+            
+            st.success(f"✅ Columns mapped successfully")
+        else:
+            st.error("❌ CSV does not have enough columns")
+            return None
         
         # Clean data
         clean_df = clean_df.dropna(subset=['Strike Price'])
@@ -209,201 +130,39 @@ def auto_convert_nse_csv(raw_df):
         clean_df = clean_df.sort_values('Strike Price').reset_index(drop=True)
         
         if len(clean_df) == 0:
-            st.error("❌ No valid data after conversion. Please check your CSV file.")
+            st.error("❌ No valid data found after conversion")
             return None
         
-        st.success(f"✅ Conversion successful! Found {len(clean_df)} valid strikes")
-        
         # Show summary
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Total Strikes", len(clean_df))
         with col2:
-            st.metric("Total Call OI", f"{clean_df['Call OI'].sum():,.0f}")
+            st.metric("Call OI", f"{clean_df['Call OI'].sum():,.0f}")
         with col3:
-            st.metric("Total Put OI", f"{clean_df['Put OI'].sum():,.0f}")
+            st.metric("Put OI", f"{clean_df['Put OI'].sum():,.0f}")
+        with col4:
+            pcr = clean_df['Put OI'].sum() / clean_df['Call OI'].sum() if clean_df['Call OI'].sum() > 0 else 0
+            st.metric("PCR", f"{pcr:.2f}")
         
         return clean_df
         
     except Exception as e:
         st.error(f"❌ Conversion error: {str(e)}")
-        st.info("💡 Please use the standalone converter script or ensure your CSV is from NSE website")
-        return None
-
-def auto_convert_multilevel_nse(raw_df):
-    """
-    Convert NSE CSV with multi-level headers
-    Format: CALLS | Strike | PUTS (with sub-columns under each)
-    """
-    try:
-        # Read with multi-level header
-        st.info("🔄 Processing multi-level CSV format...")
-        
-        # Re-read the uploaded file with header=[0,1] to get sub-columns
-        # For now, we'll work with the flattened version
-        
-        # The CSV likely has this structure:
-        # Row 0: CALLS, Unnamed, PUTS (main headers)
-        # Row 1: Sub-columns under each
-        
-        # Strategy: Read again skipping first row to get actual column names
-        # But we don't have access to the file object here
-        
-        # Alternative: Parse the existing dataframe intelligently
-        # Assume structure is: Multiple CALL columns | Strike | Multiple PUT columns
-        
-        # Find Strike column - it should have numeric values in strike price range
-        strike_col_idx = None
-        strike_col_name = None
-        
-        for i, col in enumerate(raw_df.columns):
-            try:
-                # Try to convert column to numeric
-                test_values = pd.to_numeric(raw_df[col], errors='coerce').dropna()
-                
-                if len(test_values) > 0:
-                    # Check if values look like strike prices (typically 10000-100000 range)
-                    min_val = test_values.min()
-                    max_val = test_values.max()
-                    
-                    # Strike prices are usually large numbers
-                    if min_val > 1000 and max_val > min_val and max_val < 1000000:
-                        # Check if the range makes sense for strikes
-                        value_range = max_val - min_val
-                        if 1000 < value_range < 100000:  # Reasonable strike range
-                            strike_col_idx = i
-                            strike_col_name = col
-                            break
-            except:
-                continue
-        
-        if strike_col_idx is None:
-            st.error("❌ Could not identify Strike Price column")
-            st.write("**Available columns:**", list(raw_df.columns))
-            st.write("**Sample data from each column:**")
-            for col in raw_df.columns:
-                st.write(f"{col}: {raw_df[col].head(3).tolist()}")
-            return None
-        
-        st.success(f"✓ Strike Price found at column {strike_col_idx + 1}: '{strike_col_name}'")
-        
-        # Now we need to identify OI columns
-        # In multi-level format, CALLS section is before strike, PUTS after
-        
-        # Get all columns before strike (CALLS section)
-        calls_cols = list(range(0, strike_col_idx))
-        # Get all columns after strike (PUTS section)
-        puts_cols = list(range(strike_col_idx + 1, len(raw_df.columns)))
-        
-        st.write(f"CALLS section: columns {calls_cols}")
-        st.write(f"PUTS section: columns {puts_cols}")
-        
-        # Find OI columns by looking for numeric data with large values
-        call_oi_idx = None
-        call_chg_idx = None
-        put_oi_idx = None
-        put_chg_idx = None
-        
-        # Search CALLS section for OI
-        for idx in calls_cols:
-            try:
-                col_data = pd.to_numeric(raw_df.iloc[:, idx], errors='coerce')
-                if col_data.notna().sum() > len(raw_df) * 0.5:  # At least 50% valid data
-                    max_val = col_data.max()
-                    if max_val > 1000:  # OI values are typically large
-                        if call_oi_idx is None:
-                            call_oi_idx = idx
-                            st.write(f"✓ Call OI candidate at column {idx+1}: max={max_val:,.0f}")
-                        elif call_chg_idx is None and max_val < col_data.abs().quantile(0.95) * 10:
-                            # Change values are typically smaller
-                            call_chg_idx = idx
-            except:
-                continue
-        
-        # Search PUTS section for OI
-        for idx in puts_cols:
-            try:
-                col_data = pd.to_numeric(raw_df.iloc[:, idx], errors='coerce')
-                if col_data.notna().sum() > len(raw_df) * 0.5:
-                    max_val = col_data.max()
-                    if max_val > 1000:
-                        if put_oi_idx is None:
-                            put_oi_idx = idx
-                            st.write(f"✓ Put OI candidate at column {idx+1}: max={max_val:,.0f}")
-                        elif put_chg_idx is None and max_val < col_data.abs().quantile(0.95) * 10:
-                            put_chg_idx = idx
-            except:
-                continue
-        
-        # Fallback: Use first numeric column in each section
-        if call_oi_idx is None and len(calls_cols) > 0:
-            call_oi_idx = calls_cols[-1]  # Last column before strike
-            st.warning(f"⚠️ Using fallback for Call OI: column {call_oi_idx+1}")
-        
-        if put_oi_idx is None and len(puts_cols) > 0:
-            put_oi_idx = puts_cols[0]  # First column after strike
-            st.warning(f"⚠️ Using fallback for Put OI: column {put_oi_idx+1}")
-        
-        if call_oi_idx is None or put_oi_idx is None:
-            st.error("❌ Could not identify OI columns")
-            return None
-        
-        # Create clean DataFrame
-        clean_df = pd.DataFrame()
-        
-        clean_df['Strike Price'] = pd.to_numeric(raw_df.iloc[:, strike_col_idx], errors='coerce')
-        clean_df['Call OI'] = pd.to_numeric(raw_df.iloc[:, call_oi_idx], errors='coerce').fillna(0)
-        clean_df['Call OI Change'] = pd.to_numeric(
-            raw_df.iloc[:, call_chg_idx] if call_chg_idx is not None else 0,
-            errors='coerce'
-        ).fillna(0)
-        clean_df['Put OI'] = pd.to_numeric(raw_df.iloc[:, put_oi_idx], errors='coerce').fillna(0)
-        clean_df['Put OI Change'] = pd.to_numeric(
-            raw_df.iloc[:, put_chg_idx] if put_chg_idx is not None else 0,
-            errors='coerce'
-        ).fillna(0)
-        
-        # Clean data
-        clean_df = clean_df.dropna(subset=['Strike Price'])
-        clean_df = clean_df[clean_df['Strike Price'] > 1000]  # Valid strikes only
-        clean_df = clean_df[(clean_df['Call OI'] > 0) | (clean_df['Put OI'] > 0)]
-        clean_df = clean_df.sort_values('Strike Price').reset_index(drop=True)
-        
-        if len(clean_df) == 0:
-            st.error("❌ No valid data after conversion")
-            return None
-        
-        st.success(f"✅ Conversion successful! Found {len(clean_df)} valid strikes")
-        
-        # Show summary
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Strikes", len(clean_df))
-        with col2:
-            st.metric("Total Call OI", f"{clean_df['Call OI'].sum():,.0f}")
-        with col3:
-            st.metric("Total Put OI", f"{clean_df['Put OI'].sum():,.0f}")
-        
-        # Show PCR
-        pcr = clean_df['Put OI'].sum() / clean_df['Call OI'].sum() if clean_df['Call OI'].sum() > 0 else 0
-        st.info(f"📊 PCR: {pcr:.2f}")
-        
-        return clean_df
-        
-    except Exception as e:
-        st.error(f"❌ Multi-level conversion error: {str(e)}")
         import traceback
         st.code(traceback.format_exc())
         return None
 
-# Signal Engine Class
+# ============================================================================
+# SIGNAL ENGINE CLASS
+# ============================================================================
 class OptionChainAnalyzer:
     def __init__(self, df):
         self.df = df
         self.spot_price = None
         self.max_pain = None
         self.pcr = None
-        
+    
     def calculate_max_pain(self):
         try:
             strikes = sorted(self.df['Strike Price'].unique())
@@ -422,6 +181,7 @@ class OptionChainAnalyzer:
                         put_pain += row['Put OI'] * (s - strike)
                 
                 total_pain = call_pain + put_pain
+                
                 if total_pain < min_pain:
                     min_pain = total_pain
                     max_pain_strike = strike
@@ -445,10 +205,10 @@ class OptionChainAnalyzer:
             return "UNKNOWN"
         
         distance_pct = abs(self.spot_price - self.max_pain) / self.spot_price * 100
-        
         total_call_oi_change = abs(self.df['Call OI Change'].sum())
         total_put_oi_change = abs(self.df['Put OI Change'].sum())
         total_change = total_call_oi_change + total_put_oi_change
+        
         oi_dominance = max(total_call_oi_change, total_put_oi_change) / total_change if total_change > 0 else 0.5
         
         if distance_pct > 0.35 and oi_dominance > 0.6:
@@ -462,10 +222,10 @@ class OptionChainAnalyzer:
         score = 0
         reasons = []
         direction = None
-        
         current_hour = datetime.now().hour
         market_type = self.detect_market_type()
         
+        # RANGE market - AVOID
         if market_type == "RANGE":
             return {
                 'signal': 'AVOID',
@@ -474,11 +234,15 @@ class OptionChainAnalyzer:
                 'market_type': market_type,
                 'direction': None,
                 'best_strike': None,
-                'reasons': ['Market in RANGE/CHOP zone', 'Theta decay will kill premium', 'Wait for clear directional move'],
+                'reasons': [
+                    '✗ Market in RANGE/CHOP zone',
+                    '✗ Theta decay will kill premium',
+                    '✗ Wait for clear directional move'
+                ],
                 'action': 'Stay out of the market'
             }
         
-        # Time Window
+        # Time Window Analysis
         if 11 <= current_hour < 15:
             score += 10
             reasons.append('✓ Trading in optimal time window')
@@ -489,11 +253,11 @@ class OptionChainAnalyzer:
         if self.spot_price and self.max_pain:
             if self.spot_price > self.max_pain:
                 score += 20
-                reasons.append('✓ Price above Max Pain (Bullish)')
+                reasons.append(f'✓ Price above Max Pain (Spot: {self.spot_price:.0f} > MP: {self.max_pain:.0f})')
                 direction = "CALLS"
             else:
                 score += 15
-                reasons.append('✓ Price below Max Pain (Bearish)')
+                reasons.append(f'✓ Price below Max Pain (Spot: {self.spot_price:.0f} < MP: {self.max_pain:.0f})')
                 direction = "PUTS"
         
         # OI Analysis
@@ -502,10 +266,10 @@ class OptionChainAnalyzer:
         
         if direction == "CALLS" and total_put_oi_change < 0:
             score += 25
-            reasons.append('✓ PUT OI unwinding')
+            reasons.append('✓ PUT OI unwinding (Bullish)')
         elif direction == "PUTS" and total_call_oi_change < 0:
             score += 25
-            reasons.append('✓ CALL OI unwinding')
+            reasons.append('✓ CALL OI unwinding (Bearish)')
         
         if direction == "CALLS" and total_call_oi_change > 0:
             score += 20
@@ -520,10 +284,10 @@ class OptionChainAnalyzer:
             if distance_pct > 0.35:
                 score += 15
                 reasons.append(f'✓ Good distance from Max Pain ({distance_pct:.2f}%)')
+            else:
+                score += 5
         
-        score += 5
-        
-        # Determine Signal
+        # Generate Signal
         if score >= 75:
             signal_type = "BUY"
             confidence = min(95, score)
@@ -578,200 +342,139 @@ class OptionChainAnalyzer:
     
     def get_action_message(self, signal, direction, best_strike):
         if signal == "BUY" and best_strike:
-            return f"BUY {best_strike['strike']} {best_strike['type']} with strict stop-loss"
+            return f"🎯 BUY {best_strike['strike']:.0f} {best_strike['type']} | OI Change: {best_strike['oi_change']:,.0f}"
         elif signal == "WAIT":
-            return "Wait for clear price confirmation"
+            return "⏳ Wait for clear price confirmation"
         else:
-            return "No trade - protect capital"
+            return "❌ No trade - Protect capital"
 
-# Main Application
+# ============================================================================
+# MAIN APPLICATION
+# ============================================================================
 def main():
-    st.markdown('<h1 class="main-header">📊 OPTION CHAIN ANALYZER - BUYER\'S EDGE</h1>', unsafe_allow_html=True)
+    st.title("📊 Option Chain Analyzer - Buyer's Edge")
+    st.markdown("---")
     
-    # Sidebar
+    # Sidebar - Upload & Config
     with st.sidebar:
-        st.title("⚙️ Configuration")
-        uploaded_file = st.file_uploader("Upload NSE Option Chain CSV", type=['csv'])
+        st.header("⚙️ Configuration")
         
-        st.markdown("---")
-        st.markdown("### 📌 Quick Guide")
-        st.info("**🟢 BUY:** High conviction\n**🟡 WAIT:** Setup forming\n**🔴 AVOID:** No trade zone")
+        # File Upload
+        st.subheader("1️⃣ Upload CSV")
+        uploaded_file = st.file_uploader(
+            "Choose formatted NSE option chain CSV",
+            type=['csv'],
+            help="Use the CSV generated by convert_nse.py script"
+        )
         
-        if not PLOTLY_AVAILABLE:
-            st.warning("⚠️ For full charts, add to requirements.txt:\n```\nplotly==5.18.0\n```")
-    
-    if uploaded_file is None:
-        st.info("👆 Upload NSE Option Chain CSV to begin")
-        
-        st.markdown("---")
-        st.markdown("### 📋 CSV Format Guide")
-        
-        st.markdown("""
-        **NSE CSV Format Detection:**
-        - ✅ Automatically handles multi-level NSE format
-        - ✅ Detects CALLS | Strike | PUTS structure
-        - ✅ Finds OI columns intelligently
-        
-        **If auto-detection fails:**
-        1. Download CSV from NSE
-        2. Open in Excel/Google Sheets
-        3. Look for these columns:
-           - Strike Price (middle column, has values like 48000, 48100...)
-           - Call OI (before strike, large numbers)
-           - Put OI (after strike, large numbers)
-        4. Save just those columns as new CSV
-        """)
-        
-        # Show example
-        with st.expander("📊 Example Format"):
-            example_df = pd.DataFrame({
-                'Strike Price': [48000, 48100, 48200, 48300],
-                'Call OI': [150000, 200000, 180000, 120000],
-                'Call OI Change': [-5000, 15000, 20000, -3000],
-                'Put OI': [80000, 120000, 180000, 200000],
-                'Put OI Change': [2000, -3000, 20000, 15000],
-            })
-            st.dataframe(example_df, use_container_width=True)
-        
-        return
-    
-    try:
-        # Read CSV
-        raw_df = pd.read_csv(uploaded_file)
-        
-        # Show diagnostic info
-        with st.expander("🔍 CSV Diagnostic Info"):
-            st.write("**File Info:**")
-            st.write(f"- Rows: {len(raw_df)}")
-            st.write(f"- Columns: {len(raw_df.columns)}")
+        if uploaded_file is not None:
+            # Read the CSV
+            raw_df = pd.read_csv(uploaded_file)
             
-            st.write("\n**Column Names:**")
-            for i, col in enumerate(raw_df.columns):
-                st.text(f"{i+1}. {col}")
+            # Convert to standard format
+            df = convert_csv_to_standard_format(raw_df)
             
-            st.write("\n**First 3 Rows (Raw Data):**")
-            st.dataframe(raw_df.head(3), use_container_width=True)
-        
-        # Auto-convert NSE format
-        st.markdown("### 🔄 Converting NSE CSV...")
-        df = auto_convert_nse_csv(raw_df)
-        
-        if df is None:
-            st.error("❌ Conversion failed. Please check your CSV file.")
-            st.info("💡 Tip: Download CSV directly from NSE website")
-            return
+            if df is not None:
+                st.success("✅ CSV loaded successfully!")
+                
+                # Spot Price Input
+                st.subheader("2️⃣ Market Data")
+                spot_price = st.number_input(
+                    "Enter Current Spot Price",
+                    min_value=0.0,
+                    value=50000.0,
+                    step=50.0,
+                    help="Current market price of the underlying"
+                )
+                
+                # Expiry Selection
+                expiry = st.text_input(
+                    "Enter Expiry Date",
+                    value="30-Dec-2025",
+                    help="e.g., 30-Dec-2025"
+                )
+                
+                if st.button("🚀 Analyze & Generate Signal", use_container_width=True):
+                    st.session_state['analysis_ready'] = True
+                    st.session_state['df'] = df
+                    st.session_state['spot_price'] = spot_price
+                    st.session_state['expiry'] = expiry
+
+    # Main Content Area
+    if 'analysis_ready' in st.session_state and st.session_state['analysis_ready']:
+        df = st.session_state['df']
+        spot_price = st.session_state['spot_price']
+        expiry = st.session_state['expiry']
         
         # Initialize Analyzer
         analyzer = OptionChainAnalyzer(df)
-        analyzer.spot_price = df['Strike Price'].median()
-        analyzer.max_pain = analyzer.calculate_max_pain()
-        analyzer.pcr = analyzer.calculate_pcr()
+        analyzer.spot_price = spot_price
+        analyzer.calculate_max_pain()
+        analyzer.calculate_pcr()
+        
+        # Display Analysis Results
+        st.header(f"📈 Analysis: {expiry}")
+        
+        # Key Metrics
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            st.metric("Spot Price", f"{spot_price:,.0f}")
+        with col2:
+            st.metric("Max Pain", f"{analyzer.max_pain:,.0f}")
+        with col3:
+            st.metric("PCR", f"{analyzer.pcr:.2f}")
+        with col4:
+            st.metric("Market Type", analyzer.detect_market_type())
+        with col5:
+            st.metric("Total Strikes", len(df))
+        
+        st.markdown("---")
         
         # Generate Signal
         signal_result = analyzer.generate_signal()
         
-        st.markdown("---")
-        
         # Display Signal
-        if signal_result['signal'] == 'BUY':
-            st.markdown(f"""
-            <div class="buy-signal glow-effect">
-                🟢 BUY {signal_result['direction']}
-                <div style="font-size: 1.2rem; margin-top: 10px;">
-                    Confidence: {signal_result['confidence']}% | Market: {signal_result['market_type']}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-        elif signal_result['signal'] == 'WAIT':
-            st.markdown(f"""
-            <div class="wait-signal">
-                🟡 WAIT FOR CONFIRMATION
-                <div style="font-size: 1.2rem; margin-top: 10px;">
-                    Score: {signal_result['score']}/100 | Market: {signal_result['market_type']}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="avoid-signal">
-                🔴 AVOID - NO TRADE ZONE
-                <div style="font-size: 1.2rem; margin-top: 10px;">
-                    Market: {signal_result['market_type']} | Risk: EXTREME
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+        st.subheader("🎯 Trading Signal")
         
-        # Action
-        st.markdown(f"""
-        <div style="background: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 5px solid #667eea; margin: 20px 0;">
-            <h3 style="margin: 0;">📍 ACTION</h3>
-            <p style="font-size: 1.2rem; margin: 10px 0 0 0;">{signal_result['action']}</p>
-        </div>
-        """, unsafe_allow_html=True)
+        signal_colors = {
+            "BUY": "🟢",
+            "WAIT": "🟡",
+            "AVOID": "🔴"
+        }
         
-        # Metrics
         col1, col2, col3 = st.columns(3)
+        
         with col1:
-            st.metric("Signal Score", f"{signal_result['score']}/100")
+            st.metric("Signal", f"{signal_colors[signal_result['signal']]} {signal_result['signal']}")
         with col2:
-            st.metric("Market Type", signal_result['market_type'])
+            st.metric("Score", f"{signal_result['score']}/100")
         with col3:
-            st.metric("Max Pain", f"₹{analyzer.max_pain:.0f}" if analyzer.max_pain else "N/A")
+            st.metric("Confidence", f"{signal_result['confidence']:.0f}%")
         
-        # Reasons
-        st.markdown("### 🔍 Signal Breakdown")
-        for reason in signal_result['reasons']:
-            if '✓' in reason:
-                st.success(reason)
-            else:
-                st.warning(reason)
+        # Display Reasons
+        st.subheader("📋 Analysis Details")
+        for i, reason in enumerate(signal_result['reasons'], 1):
+            st.write(f"{i}. {reason}")
         
-        # Best Strike
-        if signal_result['best_strike']:
-            st.markdown("---")
-            st.markdown("### 🎯 RECOMMENDED STRIKE")
-            strike_info = signal_result['best_strike']
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Strike", f"₹{strike_info['strike']} {strike_info['type']}")
-            with col2:
-                st.metric("OI Change", f"{strike_info['oi_change']:,}")
-            with col3:
-                st.metric("Total OI", f"{strike_info['oi']:,}")
-        
-        # Simple Charts (even without Plotly)
+        # Action Message
         st.markdown("---")
-        st.markdown("### 📊 DATA VISUALIZATION")
-        
-        if PLOTLY_AVAILABLE:
-            # Plotly charts
-            tab1, tab2 = st.tabs(["📊 OI Distribution", "📈 OI Change Flow"])
-            
-            with tab1:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(x=df['Strike Price'], y=df['Call OI'], name='Call OI', marker_color='red'))
-                fig.add_trace(go.Bar(x=df['Strike Price'], y=df['Put OI'], name='Put OI', marker_color='green'))
-                fig.update_layout(title='OI Distribution', height=500, barmode='group')
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with tab2:
-                fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(x=df['Strike Price'], y=df['Call OI Change'], name='Call OI Change', line=dict(color='red', width=3)))
-                fig2.add_trace(go.Scatter(x=df['Strike Price'], y=df['Put OI Change'], name='Put OI Change', line=dict(color='green', width=3)))
-                fig2.update_layout(title='OI Change Flow', height=500)
-                st.plotly_chart(fig2, use_container_width=True)
-        else:
-            # Fallback: Simple bar chart using Streamlit
-            st.bar_chart(df.set_index('Strike Price')[['Call OI', 'Put OI']])
+        st.info(f"**Action:** {signal_result['action']}")
         
         # Data Table
-        st.markdown("---")
-        st.markdown("### 📋 DETAILED DATA")
-        st.dataframe(df, use_container_width=True, height=400)
+        st.subheader("📊 Full Option Chain Data")
+        st.dataframe(df, use_container_width=True)
         
-    except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
-        st.info("Please ensure CSV is from NSE website")
+        # Download Data
+        csv_buffer = df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Analysis CSV",
+            data=csv_buffer,
+            file_name=f"analysis_{expiry.replace('-', '')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("👈 Please upload a CSV file and click 'Analyze' to get started")
 
 if __name__ == "__main__":
     main()
