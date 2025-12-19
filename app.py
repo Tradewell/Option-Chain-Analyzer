@@ -263,58 +263,80 @@ def compute_sbc_score(sbc_context):
 
 def auto_convert_nse_csv(raw_df):
     """
-    Automatically convert NSE CSV to standard format.
-    Handles both simple and multi-level NSE CSV formats.
-    Works with NIFTY, BANKNIFTY, FINNIFTY.
+    Conversion for NSE Option Chain CSV (index options like BANKNIFTY)
+    Expected structure (from NSE):
+    Row 0: 'CALLS', '', 'PUTS'
+    Row 1: 'OI','CHNG IN OI',...,'STRIKE',...,'CHNG IN OI','OI'
+    We will:
+      - use column 11 as Strike
+      - column 1 as Call OI, column 2 as Call OI Change
+      - column 21 as Put OI, column 20 as Put OI Change
     """
     try:
-        with st.expander("🔄 CSV Conversion Details", expanded=False):
+        with st.expander("🔄 CSV Conversion Details", expanded=True):
             st.write("**Original CSV Structure:**")
             st.write(f"Total columns: {len(raw_df.columns)}")
             st.write(f"Total rows: {len(raw_df)}")
+            st.write("**First header row:**")
+            st.write(list(raw_df.columns))
 
-        # Detect strike column
-        strike_col_idx = None
-        for i, col in enumerate(raw_df.columns):
-            if 'strike' in str(col).lower():
-                strike_col_idx = i
-                break
+        # 1) Hard mapping based on actual NSE file
+        #    (0-based indices)
+        STRIKE_COL = 11      # "STRIKE"
+        CALL_OI_COL = 1      # CALL OI
+        CALL_CHG_COL = 2     # CALL CHNG IN OI
+        PUT_CHG_COL = 20     # PUT CHNG IN OI
+        PUT_OI_COL = 21      # PUT OI
 
-        if strike_col_idx is None:
-            for i, col in enumerate(raw_df.columns):
-                try:
-                    sample = pd.to_numeric(raw_df[col].dropna().head(10), errors='coerce')
-                    if sample.notna().any():
-                        if 10000 < sample.max() < 100000 and sample.min() > 1000:
-                            strike_col_idx = i
-                            break
-                except:
-                    continue
-
-        if strike_col_idx is None:
-            strike_col_idx = len(raw_df.columns) // 2
-
-        # Find OI columns
-        call_oi_idx = max(0, strike_col_idx - 2)
-        call_chg_idx = max(0, strike_col_idx - 3)
-        put_oi_idx = min(len(raw_df.columns) - 1, strike_col_idx + 2)
-        put_chg_idx = min(len(raw_df.columns) - 1, strike_col_idx + 3)
-
-        # Create clean dataframe
         clean_df = pd.DataFrame()
-        clean_df['Strike Price'] = pd.to_numeric(raw_df.iloc[:, strike_col_idx], errors='coerce')
-        clean_df['Call OI'] = pd.to_numeric(raw_df.iloc[:, call_oi_idx], errors='coerce').fillna(0)
-        clean_df['Call OI Change'] = pd.to_numeric(raw_df.iloc[:, call_chg_idx], errors='coerce').fillna(0)
-        clean_df['Put OI'] = pd.to_numeric(raw_df.iloc[:, put_oi_idx], errors='coerce').fillna(0)
-        clean_df['Put OI Change'] = pd.to_numeric(raw_df.iloc[:, put_chg_idx], errors='coerce').fillna(0)
 
-        # Clean data
-        clean_df = clean_df.dropna(subset=['Strike Price'])
-        clean_df = clean_df[(clean_df['Call OI'] > 0) | (clean_df['Put OI'] > 0)]
-        clean_df = clean_df.sort_values('Strike Price').reset_index(drop=True)
+        # Strike
+        clean_df["Strike Price"] = (
+            pd.to_numeric(raw_df.iloc[:, STRIKE_COL]
+                          .astype(str).str.replace(",", ""),  # remove commas
+                          errors="coerce")
+        )
+
+        # Call side
+        clean_df["Call OI"] = (
+            pd.to_numeric(raw_df.iloc[:, CALL_OI_COL]
+                          .astype(str).str.replace(",", ""),
+                          errors="coerce")
+            .fillna(0)
+        )
+        clean_df["Call OI Change"] = (
+            pd.to_numeric(raw_df.iloc[:, CALL_CHG_COL]
+                          .astype(str).str.replace(",", ""),
+                          errors="coerce")
+            .fillna(0)
+        )
+
+        # Put side
+        clean_df["Put OI"] = (
+            pd.to_numeric(raw_df.iloc[:, PUT_OI_COL]
+                          .astype(str).str.replace(",", ""),
+                          errors="coerce")
+            .fillna(0)
+        )
+        clean_df["Put OI Change"] = (
+            pd.to_numeric(raw_df.iloc[:, PUT_CHG_COL]
+                          .astype(str).str.replace(",", ""),
+                          errors="coerce")
+            .fillna(0)
+        )
+
+        # 2) Clean data
+        clean_df = clean_df.dropna(subset=["Strike Price"])
+        # keep only realistic strikes
+        clean_df = clean_df[clean_df["Strike Price"] > 10000]
+        # remove rows with no OI at all
+        clean_df = clean_df[
+            (clean_df["Call OI"] > 0) | (clean_df["Put OI"] > 0)
+        ]
+        clean_df = clean_df.sort_values("Strike Price").reset_index(drop=True)
 
         if len(clean_df) == 0:
-            st.error("❌ No valid data after conversion")
+            st.error("❌ No valid data after conversion. Please check your CSV file.")
             return None
 
         st.success(f"✅ Conversion successful! Found {len(clean_df)} valid strikes")
@@ -331,6 +353,7 @@ def auto_convert_nse_csv(raw_df):
 
     except Exception as e:
         st.error(f"❌ Conversion error: {str(e)}")
+        st.info("💡 Ensure the CSV is the original NSE option chain download.")
         return None
 
 # ============================================================================
