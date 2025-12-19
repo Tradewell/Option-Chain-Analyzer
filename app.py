@@ -258,102 +258,167 @@ def compute_sbc_score(sbc_context):
     return score, reasons
 
 # ============================================================================
-# NSE CSV AUTO-CONVERTER (Existing, Enhanced)
+# NSE CSV AUTO-CONVERTER (V9.0 - Fixed for NSE multi-column format)
 # ============================================================================
-
-# ======================================================================
-# NSE CSV AUTO-CONVERTER (Final V9.0 – for NSE index option chain CSV)
-# ======================================================================
 def auto_convert_nse_csv(raw_df):
     """
-    Conversion for NSE Option Chain CSV (index options like BANKNIFTY/NIFTY).
-
-    Expected original NSE structure:
-    Row 0: CALLS , , PUTS           (main header)
-    Row 1: ,OI,CHNG IN OI,...,STRIKE,...,CHNG IN OI,OI,
-    Row 2+: data
-
-    Steps:
-    - Detect 2-row header (CALLS/PUTS)
-    - Use row 1 as real header
-    - Extract:
-        Strike Price  -> STRIKE column
-        Call OI       -> CALLS OI
-        Call OI Change-> CALLS CHNG IN OI
-        Put OI        -> PUTS OI
-        Put OI Change -> PUTS CHNG IN OI
-    Returns a clean DataFrame with:
-        ['Strike Price','Call OI','Call OI Change','Put OI','Put OI Change']
+    Conversion for NSE Option Chain CSV (BANKNIFTY/NIFTY).
+    
+    NSE CSV has complex structure with merged cells and multiple sub-columns.
+    This function intelligently detects and extracts the required columns.
     """
     try:
         with st.expander("🔄 CSV Conversion Details", expanded=True):
             st.write("**Original CSV Structure:**")
-            st.write(f"Total columns: {len(raw_df.columns)}")
+            st.write(f"Total columns detected: {len(raw_df.columns)}")
             st.write(f"Total rows: {len(raw_df)}")
-            st.write("**First row (as read by pandas):**")
+            st.write("**Column headers:**")
             st.write(list(raw_df.columns))
+            
+            # Show first few rows to understand structure
+            st.write("**First 3 rows (raw):**")
+            st.dataframe(raw_df.head(3))
 
-            # --- STEP 1: Handle NSE 2-row header ---
-            if len(raw_df.columns) > 0 and (
-                str(raw_df.columns[0]).upper() == "CALLS"
-                or str(raw_df.columns[0]).strip() == ""
-            ):
-                st.info("📋 Detected NSE 2-row header format (CALLS / PUTS)")
-                # Use first data row as actual header
-                raw_df.columns = raw_df.iloc[0]
-                raw_df = raw_df[1:].reset_index(drop=True)
-                st.write("**Detected column headers (row 1):**")
-                st.write(list(raw_df.columns))
-
-        # --- STEP 2: Hard column mapping (0-based index) ---
-        # After the above fix, BANKNIFTY CSV you shared matches these positions:
-        STRIKE_COL  = 11   # 'STRIKE'
-        CALL_OI_COL = 1    # CALLS OI
-        CALL_CHG_COL = 2   # CALLS CHNG IN OI
-        PUT_CHG_COL = 20   # PUTS CHNG IN OI
-        PUT_OI_COL  = 21   # PUTS OI
-
-        clean_df = pd.DataFrame()
-
-        # Helper: convert NSE-style numeric strings "32,222" → 32222
+        # --- METHOD 1: Try to find columns by name search ---
+        strike_col = None
+        call_oi_col = None
+        call_chg_col = None
+        put_oi_col = None
+        put_chg_col = None
+        
+        # Search for STRIKE column (usually has "STRIKE" in name or numeric values)
+        for i, col in enumerate(raw_df.columns):
+            col_str = str(col).upper()
+            if 'STRIKE' in col_str:
+                strike_col = col
+                st.success(f"✓ Found STRIKE column: '{col}'")
+                break
+        
+        # If not found by name, find by data pattern (numeric values in strike range)
+        if strike_col is None:
+            st.info("🔍 Searching for STRIKE column by data pattern...")
+            for col in raw_df.columns:
+                try:
+                    # Try to convert to numeric
+                    test_data = pd.to_numeric(
+                        raw_df[col].astype(str).str.replace(',', ''),
+                        errors='coerce'
+                    ).dropna()
+                    
+                    if len(test_data) > 5:
+                        min_val = test_data.min()
+                        max_val = test_data.max()
+                        
+                        # Check if values look like strike prices (10000-100000)
+                        if 10000 < min_val < 100000 and 10000 < max_val < 100000:
+                            strike_col = col
+                            st.success(f"✓ Found STRIKE column by pattern: '{col}'")
+                            break
+                except:
+                    continue
+        
+        if strike_col is None:
+            st.error("❌ Could not find STRIKE column")
+            st.info("💡 Please ensure you're uploading the NSE option chain CSV")
+            return None
+        
+        # Find CALL OI (before strike column)
+        strike_idx = list(raw_df.columns).index(strike_col)
+        
+        # Search backwards from strike for OI columns
+        for i in range(strike_idx - 1, max(-1, strike_idx - 15), -1):
+            col = raw_df.columns[i]
+            col_str = str(col).upper()
+            
+            # Look for OI column (not change)
+            if 'OI' in col_str and 'CHNG' not in col_str and 'CHANGE' not in col_str:
+                if call_oi_col is None:
+                    # Verify it has numeric data
+                    test_data = pd.to_numeric(
+                        raw_df[col].astype(str).str.replace(',', ''),
+                        errors='coerce'
+                    ).dropna()
+                    if len(test_data) > 0 and test_data.max() > 100:
+                        call_oi_col = col
+                        st.success(f"✓ Found CALL OI column: '{col}'")
+            
+            # Look for Change column
+            if ('CHNG' in col_str or 'CHANGE' in col_str) and 'OI' in col_str:
+                if call_chg_col is None:
+                    call_chg_col = col
+                    st.success(f"✓ Found CALL OI Change column: '{col}'")
+        
+        # Search forwards from strike for PUT columns
+        for i in range(strike_idx + 1, min(len(raw_df.columns), strike_idx + 15)):
+            col = raw_df.columns[i]
+            col_str = str(col).upper()
+            
+            # Look for Change column first (comes before OI in PUTS section)
+            if ('CHNG' in col_str or 'CHANGE' in col_str) and 'OI' in col_str:
+                if put_chg_col is None:
+                    put_chg_col = col
+                    st.success(f"✓ Found PUT OI Change column: '{col}'")
+            
+            # Look for OI column
+            if 'OI' in col_str and 'CHNG' not in col_str and 'CHANGE' not in col_str:
+                if put_oi_col is None:
+                    # Verify it has numeric data
+                    test_data = pd.to_numeric(
+                        raw_df[col].astype(str).str.replace(',', ''),
+                        errors='coerce'
+                    ).dropna()
+                    if len(test_data) > 0 and test_data.max() > 100:
+                        put_oi_col = col
+                        st.success(f"✓ Found PUT OI column: '{col}'")
+        
+        # Verify all columns found
+        if not all([strike_col, call_oi_col, put_oi_col]):
+            st.error("❌ Could not find all required columns")
+            st.write("Found:")
+            st.write(f"- Strike: {strike_col}")
+            st.write(f"- Call OI: {call_oi_col}")
+            st.write(f"- Call Change: {call_chg_col}")
+            st.write(f"- Put OI: {put_oi_col}")
+            st.write(f"- Put Change: {put_chg_col}")
+            return None
+        
+        # --- EXTRACT DATA ---
         def _to_num(series):
+            """Convert NSE-style numbers with commas to numeric"""
             return pd.to_numeric(
-                series.astype(str).str.replace(",", ""),
-                errors="coerce"
+                series.astype(str).str.replace(',', '').str.strip(),
+                errors='coerce'
             )
-
-        # Strike
-        clean_df["Strike Price"] = _to_num(raw_df.iloc[:, STRIKE_COL])
-
-        # Call side
-        clean_df["Call OI"]        = _to_num(raw_df.iloc[:, CALL_OI_COL]).fillna(0)
-        clean_df["Call OI Change"] = _to_num(raw_df.iloc[:, CALL_CHG_COL]).fillna(0)
-
-        # Put side
-        clean_df["Put OI"]        = _to_num(raw_df.iloc[:, PUT_OI_COL]).fillna(0)
-        clean_df["Put OI Change"] = _to_num(raw_df.iloc[:, PUT_CHG_COL]).fillna(0)
-
-        # --- STEP 3: Clean data ---
+        
+        clean_df = pd.DataFrame()
+        clean_df["Strike Price"] = _to_num(raw_df[strike_col])
+        clean_df["Call OI"] = _to_num(raw_df[call_oi_col]).fillna(0)
+        clean_df["Call OI Change"] = _to_num(raw_df[call_chg_col]).fillna(0) if call_chg_col else 0
+        clean_df["Put OI"] = _to_num(raw_df[put_oi_col]).fillna(0)
+        clean_df["Put OI Change"] = _to_num(raw_df[put_chg_col]).fillna(0) if put_chg_col else 0
+        
+        # --- CLEAN DATA ---
         # Remove rows without valid strike
         clean_df = clean_df.dropna(subset=["Strike Price"])
-
-        # Keep only realistic index strikes (safeguard)
+        
+        # Keep only realistic strikes
         clean_df = clean_df[clean_df["Strike Price"] > 10000]
-
-        # Remove rows where both Call & Put OI are zero
+        
+        # Remove rows with no OI
         clean_df = clean_df[
             (clean_df["Call OI"] > 0) | (clean_df["Put OI"] > 0)
         ]
-
+        
         # Sort by strike
         clean_df = clean_df.sort_values("Strike Price").reset_index(drop=True)
-
+        
         if clean_df.empty:
-            st.error("❌ No valid data after conversion. Please check your CSV file.")
+            st.error("❌ No valid data after conversion")
             return None
-
+        
         st.success(f"✅ Conversion successful! Found {len(clean_df)} valid strikes")
-
+        
+        # Show summary
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Total Strikes", len(clean_df))
@@ -361,14 +426,18 @@ def auto_convert_nse_csv(raw_df):
             st.metric("Total Call OI", f"{clean_df['Call OI'].sum():,.0f}")
         with col3:
             st.metric("Total Put OI", f"{clean_df['Put OI'].sum():,.0f}")
-
+        
+        # Show sample data
+        st.write("**Sample cleaned data (first 5 rows):**")
+        st.dataframe(clean_df.head())
+        
         return clean_df
-
+        
     except Exception as e:
         st.error(f"❌ Conversion error: {str(e)}")
-        st.info("💡 Ensure the CSV is the original NSE option chain download.")
         import traceback
         st.code(traceback.format_exc())
+        st.info("💡 Please download CSV directly from NSE website and upload")
         return None
 
 # ============================================================================
