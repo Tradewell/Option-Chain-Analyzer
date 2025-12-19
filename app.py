@@ -261,81 +261,94 @@ def compute_sbc_score(sbc_context):
 # NSE CSV AUTO-CONVERTER (Existing, Enhanced)
 # ============================================================================
 
+# ======================================================================
+# NSE CSV AUTO-CONVERTER (Final V9.0 – for NSE index option chain CSV)
+# ======================================================================
 def auto_convert_nse_csv(raw_df):
     """
-    Conversion for NSE Option Chain CSV (index options like BANKNIFTY)
-    Expected structure (from NSE):
-    Row 0: 'CALLS', '', 'PUTS'
-    Row 1: 'OI','CHNG IN OI',...,'STRIKE',...,'CHNG IN OI','OI'
-    We will:
-      - use column 11 as Strike
-      - column 1 as Call OI, column 2 as Call OI Change
-      - column 21 as Put OI, column 20 as Put OI Change
+    Conversion for NSE Option Chain CSV (index options like BANKNIFTY/NIFTY).
+
+    Expected original NSE structure:
+    Row 0: CALLS , , PUTS           (main header)
+    Row 1: ,OI,CHNG IN OI,...,STRIKE,...,CHNG IN OI,OI,
+    Row 2+: data
+
+    Steps:
+    - Detect 2-row header (CALLS/PUTS)
+    - Use row 1 as real header
+    - Extract:
+        Strike Price  -> STRIKE column
+        Call OI       -> CALLS OI
+        Call OI Change-> CALLS CHNG IN OI
+        Put OI        -> PUTS OI
+        Put OI Change -> PUTS CHNG IN OI
+    Returns a clean DataFrame with:
+        ['Strike Price','Call OI','Call OI Change','Put OI','Put OI Change']
     """
     try:
         with st.expander("🔄 CSV Conversion Details", expanded=True):
             st.write("**Original CSV Structure:**")
             st.write(f"Total columns: {len(raw_df.columns)}")
             st.write(f"Total rows: {len(raw_df)}")
-            st.write("**First header row:**")
+            st.write("**First row (as read by pandas):**")
             st.write(list(raw_df.columns))
 
-        # 1) Hard mapping based on actual NSE file
-        #    (0-based indices)
-        STRIKE_COL = 11      # "STRIKE"
-        CALL_OI_COL = 1      # CALL OI
-        CALL_CHG_COL = 2     # CALL CHNG IN OI
-        PUT_CHG_COL = 20     # PUT CHNG IN OI
-        PUT_OI_COL = 21      # PUT OI
+            # --- STEP 1: Handle NSE 2-row header ---
+            if len(raw_df.columns) > 0 and (
+                str(raw_df.columns[0]).upper() == "CALLS"
+                or str(raw_df.columns[0]).strip() == ""
+            ):
+                st.info("📋 Detected NSE 2-row header format (CALLS / PUTS)")
+                # Use first data row as actual header
+                raw_df.columns = raw_df.iloc[0]
+                raw_df = raw_df[1:].reset_index(drop=True)
+                st.write("**Detected column headers (row 1):**")
+                st.write(list(raw_df.columns))
+
+        # --- STEP 2: Hard column mapping (0-based index) ---
+        # After the above fix, BANKNIFTY CSV you shared matches these positions:
+        STRIKE_COL  = 11   # 'STRIKE'
+        CALL_OI_COL = 1    # CALLS OI
+        CALL_CHG_COL = 2   # CALLS CHNG IN OI
+        PUT_CHG_COL = 20   # PUTS CHNG IN OI
+        PUT_OI_COL  = 21   # PUTS OI
 
         clean_df = pd.DataFrame()
 
+        # Helper: convert NSE-style numeric strings "32,222" → 32222
+        def _to_num(series):
+            return pd.to_numeric(
+                series.astype(str).str.replace(",", ""),
+                errors="coerce"
+            )
+
         # Strike
-        clean_df["Strike Price"] = (
-            pd.to_numeric(raw_df.iloc[:, STRIKE_COL]
-                          .astype(str).str.replace(",", ""),  # remove commas
-                          errors="coerce")
-        )
+        clean_df["Strike Price"] = _to_num(raw_df.iloc[:, STRIKE_COL])
 
         # Call side
-        clean_df["Call OI"] = (
-            pd.to_numeric(raw_df.iloc[:, CALL_OI_COL]
-                          .astype(str).str.replace(",", ""),
-                          errors="coerce")
-            .fillna(0)
-        )
-        clean_df["Call OI Change"] = (
-            pd.to_numeric(raw_df.iloc[:, CALL_CHG_COL]
-                          .astype(str).str.replace(",", ""),
-                          errors="coerce")
-            .fillna(0)
-        )
+        clean_df["Call OI"]        = _to_num(raw_df.iloc[:, CALL_OI_COL]).fillna(0)
+        clean_df["Call OI Change"] = _to_num(raw_df.iloc[:, CALL_CHG_COL]).fillna(0)
 
         # Put side
-        clean_df["Put OI"] = (
-            pd.to_numeric(raw_df.iloc[:, PUT_OI_COL]
-                          .astype(str).str.replace(",", ""),
-                          errors="coerce")
-            .fillna(0)
-        )
-        clean_df["Put OI Change"] = (
-            pd.to_numeric(raw_df.iloc[:, PUT_CHG_COL]
-                          .astype(str).str.replace(",", ""),
-                          errors="coerce")
-            .fillna(0)
-        )
+        clean_df["Put OI"]        = _to_num(raw_df.iloc[:, PUT_OI_COL]).fillna(0)
+        clean_df["Put OI Change"] = _to_num(raw_df.iloc[:, PUT_CHG_COL]).fillna(0)
 
-        # 2) Clean data
+        # --- STEP 3: Clean data ---
+        # Remove rows without valid strike
         clean_df = clean_df.dropna(subset=["Strike Price"])
-        # keep only realistic strikes
+
+        # Keep only realistic index strikes (safeguard)
         clean_df = clean_df[clean_df["Strike Price"] > 10000]
-        # remove rows with no OI at all
+
+        # Remove rows where both Call & Put OI are zero
         clean_df = clean_df[
             (clean_df["Call OI"] > 0) | (clean_df["Put OI"] > 0)
         ]
+
+        # Sort by strike
         clean_df = clean_df.sort_values("Strike Price").reset_index(drop=True)
 
-        if len(clean_df) == 0:
+        if clean_df.empty:
             st.error("❌ No valid data after conversion. Please check your CSV file.")
             return None
 
@@ -354,6 +367,8 @@ def auto_convert_nse_csv(raw_df):
     except Exception as e:
         st.error(f"❌ Conversion error: {str(e)}")
         st.info("💡 Ensure the CSV is the original NSE option chain download.")
+        import traceback
+        st.code(traceback.format_exc())
         return None
 
 # ============================================================================
