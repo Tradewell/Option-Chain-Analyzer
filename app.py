@@ -494,8 +494,8 @@ def main():
             3. Enter credentials below
             """)
             
-            client_code = st.text_input("Angel Broking Client Code", type="password")
-            api_key = st.text_input("API Key", type="password")
+            client_code = st.text_input("AAAQ573450", type="Ayush@2018")
+            api_key = st.text_input("W7aGx1Bh", type="010667@Uday")
             
             if st.button("🔗 Connect to Angel Broking", use_container_width=True):
                 st.warning("⏳ API Integration in Progress - Check back soon!")
