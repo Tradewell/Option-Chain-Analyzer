@@ -4,10 +4,30 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import streamlit as st
-import plotly.graph_objects as go
 
-from smartapi import SmartConnect
-from ta.momentum import RSIIndicator
+# ============================================================================
+# SAFE PLOTLY IMPORT (CRITICAL FIX)
+# ============================================================================
+try:
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError as e:
+    st.error("❌ Plotly module not found. Please ensure plotly is in requirements.txt")
+    st.error(f"Error: {str(e)}")
+    PLOTLY_AVAILABLE = False
+    st.stop()
+
+try:
+    from smartapi import SmartConnect
+except ImportError:
+    st.error("❌ SmartAPI not found. Add 'smartapi-python==1.3.7' to requirements.txt")
+    st.stop()
+
+try:
+    from ta.momentum import RSIIndicator
+except ImportError:
+    st.error("❌ TA library not found. Add 'ta==0.11.0' to requirements.txt")
+    st.stop()
 
 # ============================================================================
 # PAGE CONFIG
@@ -98,7 +118,7 @@ def compute_sbc_score(sbc_context):
     return score, reasons
 
 # ============================================================================
-# OPTION CHAIN ENGINE (FROM YOUR EXISTING APP, SLIGHTLY CLEANED)
+# OPTION CHAIN ENGINE
 # ============================================================================
 
 class OptionChainAnalyzer:
@@ -229,7 +249,6 @@ class OptionChainAnalyzer:
                 score += 5
 
         base_score = score
-
         sbc_score = 0
         if sbc_context is not None:
             sbc_score, sbc_reasons = compute_sbc_score(sbc_context)
@@ -420,7 +439,7 @@ def build_indicator_scores(df: pd.DataFrame):
     return {"tech_score": score, "tech_reasons": reasons, "ad_stats": ad}
 
 # ============================================================================
-# COMBINED SCORING ENGINE (OI + TECH + SBC, MODES)
+# COMBINED SCORING ENGINE
 # ============================================================================
 
 def combine_scores(oi_score, tech_score, sbc_score, market_type, tithi_name, mode="Scalping"):
@@ -434,7 +453,7 @@ def combine_scores(oi_score, tech_score, sbc_score, market_type, tithi_name, mod
     elif mode == "Intraday":
         w_oi, w_tech, w_sbc = 0.45, 0.40, 0.15
         mode_bias = 5
-    else:  # Swing
+    else:
         w_oi, w_tech, w_sbc = 0.35, 0.25, 0.40
         mode_bias = 0
 
@@ -481,7 +500,7 @@ def main():
     with st.sidebar:
         st.header("⚙️ Configuration")
         mode = st.radio("Trading Mode", ["Scalping", "Intraday", "Swing"])
-        data_mode = st.radio("Data Mode", ["CSV + SmartAPI (Live)", "CSV Only"])
+        data_mode = st.radio("Data Mode", ["CSV Only", "CSV + SmartAPI (Live)"])
         underlying = st.selectbox("Underlying", ["BANKNIFTY", "NIFTY"])
         timeframe = st.selectbox(
             "Spot timeframe",
@@ -515,7 +534,6 @@ def main():
         st.error("Please upload a clean option-chain CSV.")
         return
 
-    # ---- OPTION CHAIN SECTION ----
     df_oc = pd.read_csv(uploaded_file)
     for col in ["Strike Price", "Call OI", "Call OI Change", "Put OI", "Put OI Change"]:
         if col not in df_oc.columns:
@@ -550,7 +568,6 @@ def main():
     oi_score = oc_signal["base_score"]
     sbc_score = oc_signal["sbc_score"]
 
-    # ---- PRICE/VOLUME SECTION (SMARTAPI) ----
     candles = None
     tech_block = {"tech_score": 0, "tech_reasons": [], "ad_stats": None}
     if data_mode == "CSV + SmartAPI (Live)":
@@ -574,7 +591,6 @@ def main():
         mode=mode,
     )
 
-    # ---- METRICS ROW ----
     st.markdown("---")
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
@@ -595,7 +611,6 @@ def main():
         ["🎯 Signal", "📊 Structure", "📈 OI", "📉 Price & Volume", "🌀 SBC (V10)", "💡 Pro Strategy"]
     )
 
-    # ---- TAB 1: SIGNAL ----
     with tab_signal:
         st.subheader("🎯 Final Trading Signal")
         signal_colors = {
@@ -630,7 +645,6 @@ def main():
         for r in tech_block["tech_reasons"]:
             st.write("•", r)
 
-    # ---- TAB 2: STRUCTURE ----
     with tab_structure:
         st.subheader("📊 Market Structure")
         support, resistance = analyzer.get_support_resistance()
@@ -650,12 +664,7 @@ def main():
         fig = go.Figure()
         fig.add_bar(x=df_oc["Strike Price"], y=df_oc["Call OI"], name="Call OI", marker_color="indianred")
         fig.add_bar(x=df_oc["Strike Price"], y=df_oc["Put OI"], name="Put OI", marker_color="seagreen")
-        fig.update_layout(
-            barmode="group",
-            height=400,
-            xaxis_title="Strike",
-            yaxis_title="Open Interest",
-        )
+        fig.update_layout(barmode="group", height=400, xaxis_title="Strike", yaxis_title="Open Interest")
         st.plotly_chart(fig, use_container_width=True)
 
         if candles is not None:
@@ -663,16 +672,10 @@ def main():
             st.write("**Volume Profile (spot close)**")
             profile = compute_volume_profile(candles, bins=20)
             fig2 = go.Figure()
-            fig2.add_bar(
-                y=[f"{i.left:.0f}-{i.right:.0f}" for i in profile.index],
-                x=profile.values,
-                orientation="h",
-                marker_color="steelblue",
-            )
+            fig2.add_bar(y=[f"{i.left:.0f}-{i.right:.0f}" for i in profile.index], x=profile.values, orientation="h", marker_color="steelblue")
             fig2.update_layout(height=500, xaxis_title="Volume", yaxis_title="Price Range")
             st.plotly_chart(fig2, use_container_width=True)
 
-    # ---- TAB 3: OI ----
     with tab_oi:
         st.subheader("📈 Open Interest Analysis")
         o1, o2 = st.columns(2)
@@ -682,62 +685,29 @@ def main():
             st.metric("Total Put OI", f"{df_oc['Put OI'].sum():,.0f}")
 
         fig3 = go.Figure()
-        fig3.add_bar(
-            x=df_oc["Strike Price"],
-            y=df_oc["Call OI Change"],
-            name="Call OI Change",
-            marker_color="salmon",
-        )
-        fig3.add_bar(
-            x=df_oc["Strike Price"],
-            y=df_oc["Put OI Change"],
-            name="Put OI Change",
-            marker_color="lightgreen",
-        )
-        fig3.update_layout(
-            barmode="group",
-            height=400,
-            xaxis_title="Strike",
-            yaxis_title="OI Change",
-        )
+        fig3.add_bar(x=df_oc["Strike Price"], y=df_oc["Call OI Change"], name="Call OI Change", marker_color="salmon")
+        fig3.add_bar(x=df_oc["Strike Price"], y=df_oc["Put OI Change"], name="Put OI Change", marker_color="lightgreen")
+        fig3.update_layout(barmode="group", height=400, xaxis_title="Strike", yaxis_title="OI Change")
         st.plotly_chart(fig3, use_container_width=True)
 
         st.markdown("---")
         st.dataframe(df_oc, use_container_width=True, height=400)
 
-    # ---- TAB 4: PRICE & VOLUME ----
     with tab_pv:
         st.subheader("📉 Price, VWAP, Volume & RSI")
         if candles is None:
             st.info("Connect SmartAPI (CSV + SmartAPI mode) to see price/volume charts.")
         else:
             fig_p = go.Figure()
-            fig_p.add_candlestick(
-                x=candles.index,
-                open=candles["open"],
-                high=candles["high"],
-                low=candles["low"],
-                close=candles["close"],
-                name="Price",
-            )
-            fig_p.add_scatter(
-                x=candles.index,
-                y=candles["vwap"],
-                name="VWAP",
-                line=dict(color="orange", width=2),
-            )
+            fig_p.add_candlestick(x=candles.index, open=candles["open"], high=candles["high"], low=candles["low"], close=candles["close"], name="Price")
+            fig_p.add_scatter(x=candles.index, y=candles["vwap"], name="VWAP", line=dict(color="orange", width=2))
             fig_p.update_layout(height=450, xaxis_title="Time", yaxis_title="Price")
             st.plotly_chart(fig_p, use_container_width=True)
 
             fig_v = go.Figure()
             fig_v.add_bar(x=candles.index, y=candles["volume"], name="Volume", marker_color="lightgrey")
             fig_v.add_bar(x=candles.index, y=candles["volume_delta"], name="Volume Delta", marker_color="teal")
-            fig_v.update_layout(
-                barmode="overlay",
-                height=300,
-                xaxis_title="Time",
-                yaxis_title="Volume / Delta",
-            )
+            fig_v.update_layout(barmode="overlay", height=300, xaxis_title="Time", yaxis_title="Volume / Delta")
             st.plotly_chart(fig_v, use_container_width=True)
 
             fig_r = go.Figure()
@@ -747,24 +717,13 @@ def main():
 
             bull_idx = candles.index[candles["rsi_divergence"] == 1]
             bear_idx = candles.index[candles["rsi_divergence"] == -1]
-            fig_r.add_scatter(
-                x=bull_idx,
-                y=candles.loc[bull_idx, "rsi"],
-                mode="markers",
-                marker=dict(color="green", size=9),
-                name="Bullish Div",
-            )
-            fig_r.add_scatter(
-                x=bear_idx,
-                y=candles.loc[bear_idx, "rsi"],
-                mode="markers",
-                marker=dict(color="red", size=9),
-                name="Bearish Div",
-            )
+            if len(bull_idx) > 0:
+                fig_r.add_scatter(x=bull_idx, y=candles.loc[bull_idx, "rsi"], mode="markers", marker=dict(color="green", size=9), name="Bullish Div")
+            if len(bear_idx) > 0:
+                fig_r.add_scatter(x=bear_idx, y=candles.loc[bear_idx, "rsi"], mode="markers", marker=dict(color="red", size=9), name="Bearish Div")
             fig_r.update_layout(height=300, xaxis_title="Time", yaxis_title="RSI")
             st.plotly_chart(fig_r, use_container_width=True)
 
-    # ---- TAB 5: SBC ----
     with tab_sbc:
         st.subheader("🌀 Surya-Brahma-Chandra (SBC) Analysis – V10")
         s1, s2, s3 = st.columns(3)
@@ -782,10 +741,8 @@ def main():
             st.write("•", r)
         st.caption("Swing mode gives higher weight to SBC score.")
 
-    # ---- TAB 6: PRO STRATEGY ----
     with tab_pro:
         st.subheader("💡 Pro Strategy Playbook")
-
         st.write(f"**Final Signal:** {final_signal} (Score {final_score}/100, {final_conf}% confidence)")
         st.write(f"**Mode:** {mode.upper()} | **Market Type:** {market_type} | **Tithi:** {tithi_name}")
 
