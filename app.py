@@ -1,98 +1,27 @@
-"""
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                                                                              ║
-║         🌀 ASTROQUANT PRO V9.0 - ULTIMATE SBC EDITION (SIMPLIFIED) 🌀       ║
-║                                                                              ║
-║     Professional Option Chain Analyzer with Refined Sarvatobhadra Chakra    ║
-║              Integration for NIFTY & BANKNIFTY Trading                      ║
-║                                                                              ║
-║  Version: 9.0.1 - Simplified (CSV Upload + Angel Broking Live API)         ║
-║  Author: AstroQuant India Trading Community                                ║
-║  Date: December 20, 2025                                                   ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-"""
-
-import streamlit as st
-import pandas as pd
-import numpy as np
+import math
 from datetime import datetime, timedelta
-import time
-import traceback
 
-# Try importing plotly
-try:
-    import plotly.graph_objects as go
-    import plotly.express as px
-    PLOTLY_AVAILABLE = True
-except ImportError:
-    PLOTLY_AVAILABLE = False
-    st.warning("⚠️ Plotly not installed. Add 'plotly' to requirements.txt for charts")
+import numpy as np
+import pandas as pd
+import streamlit as st
+import plotly.graph_objects as go
+
+from smartapi import SmartConnect
+from ta.momentum import RSIIndicator
 
 # ============================================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================================
 
 st.set_page_config(
-    page_title="AstroQuant Pro V9.0 - Ultimate SBC Edition",
+    page_title="AstroQuant Pro V10.0 - SmartAPI Edition",
     page_icon="🌀",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 # ============================================================================
-# CUSTOM CSS
-# ============================================================================
-
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: 800;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-align: center;
-        margin-bottom: 1rem;
-    }
-    .buy-signal {
-        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-        color: white;
-        font-size: 1.8rem;
-        font-weight: bold;
-        text-align: center;
-        padding: 30px;
-        border-radius: 15px;
-        margin: 20px 0;
-        box-shadow: 0 8px 16px rgba(17, 153, 142, 0.3);
-    }
-    .wait-signal {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        color: white;
-        font-size: 1.8rem;
-        font-weight: bold;
-        text-align: center;
-        padding: 30px;
-        border-radius: 15px;
-        margin: 20px 0;
-        box-shadow: 0 8px 16px rgba(245, 87, 108, 0.3);
-    }
-    .avoid-signal {
-        background: linear-gradient(135deg, #ee0979 0%, #ff6a00 100%);
-        color: white;
-        font-size: 1.8rem;
-        font-weight: bold;
-        text-align: center;
-        padding: 30px;
-        border-radius: 15px;
-        margin: 20px 0;
-        box-shadow: 0 8px 16px rgba(238, 9, 121, 0.3);
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ============================================================================
-# V9.0 - SARVATOBHADRA CHAKRA & NAKSHATRA ENGINE
+# SBC ENGINE (NAKSHATRA + TITHI)
 # ============================================================================
 
 NAKSHATRAS = [
@@ -104,9 +33,6 @@ NAKSHATRAS = [
     "Uttara Bhadrapada", "Revati"
 ]
 
-BENEFIC_PLANETS = {"Jupiter", "Venus", "Moon", "Mercury"}
-MALEFIC_PLANETS = {"Saturn", "Mars", "Rahu", "Ketu"}
-
 NAKSHATRA_SENTIMENT = {
     "Pushya": "Reversal",
     "Ashwini": "Bullish", "Rohini": "Bullish", "Hasta": "Bullish",
@@ -115,42 +41,31 @@ NAKSHATRA_SENTIMENT = {
     "Aslesha": "Bearish", "Jyestha": "Bearish", "Mula": "Bearish", "Shatabhisha": "Bearish"
 }
 
-# ============================================================================
-# HELPER FUNCTIONS - ASTROLOGY
-# ============================================================================
-
 def get_market_nakshatra(price: float) -> str:
-    """Map NIFTY/BANKNIFTY spot price to nakshatra (every 100 points = 1 step)"""
     if price <= 0:
         return "Ashwini"
-    reduced_value = int(price / 100)
-    idx = reduced_value % 27
+    idx = int(price / 100) % 27
     return NAKSHATRAS[idx]
 
 def get_tithi_info():
-    """Calculate current Tithi (lunar day)"""
     day_of_month = datetime.now().day
     tithi = ((day_of_month - 1) % 30) + 1
-    
     tithi_mapping = {
         "Nanda": [1, 6, 11, 16, 21, 26],
         "Bhadra": [2, 7, 12, 17, 22, 27],
         "Jaya": [3, 8, 13, 18, 23, 28],
         "Rikta": [4, 9, 14, 19, 24, 29],
-        "Poorna": [5, 10, 15, 20, 25, 30]
+        "Poorna": [5, 10, 15, 20, 25, 30],
     }
-    
     for name, days in tithi_mapping.items():
         if tithi in days:
             return name, tithi
     return "Unknown", tithi
 
 def compute_sbc_score(sbc_context):
-    """V9.0 Refined SBC Scoring Engine"""
     score = 0
     reasons = []
-    
-    # Nakshatra sentiment
+
     for label, nak in [("Moon", sbc_context.get("moon_nakshatra")),
                        ("Index", sbc_context.get("index_nakshatra"))]:
         if not nak:
@@ -164,9 +79,8 @@ def compute_sbc_score(sbc_context):
             reasons.append(f"✗ {label} in bearish nakshatra {nak} (−10)")
         elif sentiment == "Reversal":
             score += 15
-            reasons.append(f"★ {label} in Pushya (MAJOR REVERSAL ZONE) (+15)")
-    
-    # Tithi weighting
+            reasons.append(f"★ {label} in Pushya (major reversal zone) (+15)")
+
     tithi_name = sbc_context.get("tithi_name")
     if tithi_name == "Nanda":
         score += 10
@@ -176,74 +90,65 @@ def compute_sbc_score(sbc_context):
         reasons.append("~ Jaya tithi (victory/trending) (+5)")
     elif tithi_name == "Rikta":
         score -= 20
-        reasons.append("✗ Rikta tithi (empty/volatile - AVOID) (−20)")
+        reasons.append("✗ Rikta tithi (empty/volatile – avoid aggression) (−20)")
     elif tithi_name == "Poorna":
         score += 5
         reasons.append("~ Poorna tithi (completion/strong moves) (+5)")
-    
+
     return score, reasons
 
 # ============================================================================
-# OPTION CHAIN ANALYZER CLASS
+# OPTION CHAIN ENGINE (FROM YOUR EXISTING APP, SLIGHTLY CLEANED)
 # ============================================================================
 
 class OptionChainAnalyzer:
-    """V9.0 Enhanced Option Chain Analyzer with SBC Integration"""
-    
-    def __init__(self, df):
+    def __init__(self, df: pd.DataFrame):
         self.df = df
         self.spot_price = None
         self.max_pain = None
         self.pcr = None
 
     def calculate_max_pain(self):
-        """Calculate Max Pain (point of highest consolidated decay)"""
         try:
-            strikes = sorted(self.df['Strike Price'].unique())
-            min_pain = float('inf')
-            max_pain_strike = strikes[len(strikes)//2]
-            
+            strikes = sorted(self.df["Strike Price"].unique())
+            min_pain = float("inf")
+            max_pain_strike = strikes[len(strikes) // 2]
             for strike in strikes:
                 call_pain = 0
                 put_pain = 0
-                for idx, row in self.df.iterrows():
-                    s = row['Strike Price']
+                for _, row in self.df.iterrows():
+                    s = row["Strike Price"]
                     if s < strike:
-                        call_pain += row['Call OI'] * (strike - s)
+                        call_pain += row["Call OI"] * (strike - s)
                     if s > strike:
-                        put_pain += row['Put OI'] * (s - strike)
-                
+                        put_pain += row["Put OI"] * (s - strike)
                 total_pain = call_pain + put_pain
                 if total_pain < min_pain:
                     min_pain = total_pain
                     max_pain_strike = strike
-            
             self.max_pain = max_pain_strike
             return self.max_pain
-        except:
+        except Exception:
             return None
 
     def calculate_pcr(self):
-        """Calculate Put-Call Ratio"""
         try:
-            total_put_oi = self.df['Put OI'].sum()
-            total_call_oi = self.df['Call OI'].sum()
+            total_put_oi = self.df["Put OI"].sum()
+            total_call_oi = self.df["Call OI"].sum()
             self.pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 1.0
             return self.pcr
-        except:
-            return 1.0
+        except Exception:
+            self.pcr = 1.0
+            return self.pcr
 
     def detect_market_type(self):
-        """Detect if market is in RANGE, EXPANSION, or NEUTRAL mode"""
         if self.spot_price is None or self.max_pain is None:
             return "UNKNOWN"
-        
         distance_pct = abs(self.spot_price - self.max_pain) / self.spot_price * 100
-        total_call_oi_change = abs(self.df['Call OI Change'].sum())
-        total_put_oi_change = abs(self.df['Put OI Change'].sum())
+        total_call_oi_change = abs(self.df["Call OI Change"].sum())
+        total_put_oi_change = abs(self.df["Put OI Change"].sum())
         total_change = total_call_oi_change + total_put_oi_change
         oi_dominance = max(total_call_oi_change, total_put_oi_change) / total_change if total_change > 0 else 0.5
-        
         if distance_pct > 0.35 and oi_dominance > 0.6:
             return "EXPANSION"
         elif distance_pct < 0.25 and 0.9 <= self.pcr <= 1.1:
@@ -252,78 +157,90 @@ class OptionChainAnalyzer:
             return "NEUTRAL"
 
     def generate_signal(self, sbc_context=None):
-        """V9.0 Signal Generation: OI + SBC Combined"""
         score = 0
         reasons = []
         direction = None
         current_hour = datetime.now().hour
         market_type = self.detect_market_type()
 
-        # RANGE market = AVOID
         if market_type == "RANGE":
             return {
-                'signal': 'AVOID',
-                'score': 0,
-                'confidence': 0,
-                'market_type': market_type,
-                'direction': None,
-                'best_strike': None,
-                'reasons': ['✗ Market in RANGE/CHOP zone', '✗ Theta decay will kill premium'],
-                'action': 'Stay out of the market',
-                'base_score': 0,
-                'sbc_score': 0
+                "signal": "AVOID",
+                "score": 0,
+                "confidence": 0,
+                "market_type": market_type,
+                "direction": None,
+                "best_strike": None,
+                "reasons": [
+                    "✗ Market in RANGE/CHOP zone",
+                    "✗ Theta decay will kill premium",
+                    "✗ Wait for clear directional move",
+                ],
+                "action": "Stay out of the market",
+                "base_score": 0,
+                "sbc_score": 0,
             }
 
-        # OI TECHNICAL SCORE
         if 11 <= current_hour < 15:
             score += 10
-            reasons.append('✓ Trading in optimal time window (11 AM - 3 PM)')
+            reasons.append("✓ Trading in optimal time window (11 AM – 3 PM)")
         else:
-            reasons.append('✗ Outside optimal trading hours')
+            reasons.append("✗ Outside optimal trading hours")
 
         if self.spot_price and self.max_pain:
             if self.spot_price > self.max_pain:
                 score += 20
-                reasons.append(f'✓ Price above Max Pain (Spot: {self.spot_price:.0f})')
+                reasons.append(
+                    f"✓ Price above Max Pain (Spot: {self.spot_price:.0f} > MP: {self.max_pain:.0f})"
+                )
                 direction = "CALLS"
             else:
                 score += 15
-                reasons.append(f'✓ Price below Max Pain (Spot: {self.spot_price:.0f})')
+                reasons.append(
+                    f"✓ Price below Max Pain (Spot: {self.spot_price:.0f} < MP: {self.max_pain:.0f})"
+                )
                 direction = "PUTS"
 
-        total_call_oi_change = self.df['Call OI Change'].sum()
-        total_put_oi_change = self.df['Put OI Change'].sum()
+        total_call_oi_change = self.df["Call OI Change"].sum()
+        total_put_oi_change = self.df["Put OI Change"].sum()
 
         if direction == "CALLS" and total_put_oi_change < 0:
             score += 25
-            reasons.append('✓ PUT OI unwinding (strong bullish signal)')
+            reasons.append("✓ PUT OI unwinding (strong bullish signal)")
         elif direction == "PUTS" and total_call_oi_change < 0:
             score += 25
-            reasons.append('✓ CALL OI unwinding (strong bearish signal)')
+            reasons.append("✓ CALL OI unwinding (strong bearish signal)")
+
+        if direction == "CALLS" and total_call_oi_change > 0:
+            score += 20
+            reasons.append("✓ Fresh CALL OI addition (new longs entering)")
+        elif direction == "PUTS" and total_put_oi_change > 0:
+            score += 20
+            reasons.append("✓ Fresh PUT OI addition (new shorts entering)")
 
         if self.spot_price and self.max_pain:
             distance_pct = abs(self.spot_price - self.max_pain) / self.spot_price * 100
             if distance_pct > 0.35:
                 score += 15
-                reasons.append(f'✓ Good distance from Max Pain ({distance_pct:.2f}%)')
+                reasons.append(
+                    f"✓ Good distance from Max Pain ({distance_pct:.2f}% – good premium potential)"
+                )
+            else:
+                score += 5
 
         base_score = score
 
-        # SBC OVERLAY SCORE
         sbc_score = 0
-        sbc_reasons = []
         if sbc_context is not None:
             sbc_score, sbc_reasons = compute_sbc_score(sbc_context)
             score += sbc_score
             reasons.extend(sbc_reasons)
 
-        # Rikta tithi guardrail
         if sbc_context and sbc_context.get("tithi_name") == "Rikta":
             if score >= 75:
-                reasons.append("⚠️ Rikta tithi detected – capped conviction for safety")
+                reasons.append("⚠️ Rikta tithi – cap conviction for safety")
                 score = max(score, 70)
 
-        # Final signal decision
         if score >= 75:
             signal_type = "BUY"
             confidence = min(95, score)
@@ -334,356 +251,564 @@ class OptionChainAnalyzer:
             signal_type = "AVOID"
             confidence = 100 - score
 
-        best_strike = self.find_best_strike(direction if score >= 50 else None)
-
         return {
-            'signal': signal_type,
-            'score': score,
-            'confidence': confidence,
-            'market_type': market_type,
-            'direction': direction,
-            'best_strike': best_strike,
-            'reasons': reasons,
-            'action': self.get_action_message(signal_type, direction, best_strike),
-            'base_score': base_score,
-            'sbc_score': sbc_score
+            "signal": signal_type,
+            "score": score,
+            "confidence": confidence,
+            "market_type": market_type,
+            "direction": direction,
+            "best_strike": None,
+            "reasons": reasons,
+            "action": self.get_action_message(signal_type),
+            "base_score": base_score,
+            "sbc_score": sbc_score,
         }
 
-    def find_best_strike(self, direction):
-        """Find best strike for the given direction"""
-        if not direction or self.spot_price is None:
-            return None
-        
-        self.df['Distance'] = abs(self.df['Strike Price'] - self.spot_price)
-        atm_strike = self.df.loc[self.df['Distance'].idxmin(), 'Strike Price']
-        
-        if direction == "CALLS":
-            candidates = self.df[self.df['Strike Price'].between(atm_strike, atm_strike + 200)]
-            if not candidates.empty:
-                best = candidates.loc[candidates['Call OI Change'].idxmax()]
-                return {
-                    'strike': best['Strike Price'],
-                    'type': 'CE',
-                    'oi_change': best['Call OI Change'],
-                    'oi': best['Call OI']
-                }
-        else:
-            candidates = self.df[self.df['Strike Price'].between(atm_strike - 200, atm_strike)]
-            if not candidates.empty:
-                best = candidates.loc[candidates['Put OI Change'].idxmax()]
-                return {
-                    'strike': best['Strike Price'],
-                    'type': 'PE',
-                    'oi_change': best['Put OI Change'],
-                    'oi': best['Put OI']
-                }
-        return None
-
-    def get_action_message(self, signal, direction, best_strike):
-        """Generate trading action message"""
-        if signal == "BUY" and best_strike:
-            return f"🎯 BUY {best_strike['strike']:.0f} {best_strike['type']} | OI Change: {best_strike['oi_change']:,.0f}"
+    def get_action_message(self, signal, direction=None):
+        if signal == "BUY":
+            return "🎯 BUY with strict stop-loss and proper position sizing"
         elif signal == "WAIT":
             return "⏳ Wait for clear price confirmation before entering"
         else:
             return "❌ No trade setup – Protect capital, stay in cash"
 
     def get_support_resistance(self):
-        """Calculate support (put OI) and resistance (call OI) levels"""
         if self.df.empty:
             return None, None
-        put_oi_max_idx = self.df['Put OI'].idxmax()
-        call_oi_max_idx = self.df['Call OI'].idxmax()
-        support = self.df.loc[put_oi_max_idx, 'Strike Price']
-        resistance = self.df.loc[call_oi_max_idx, 'Strike Price']
+        put_oi_max_idx = self.df["Put OI"].idxmax()
+        call_oi_max_idx = self.df["Call OI"].idxmax()
+        support = self.df.loc[put_oi_max_idx, "Strike Price"]
+        resistance = self.df.loc[call_oi_max_idx, "Strike Price"]
         return support, resistance
 
 # ============================================================================
-# MAIN APPLICATION
+# SMARTAPI CONNECTOR (CANDLES)
+# ============================================================================
+
+TOKEN_MAP = {
+    "BANKNIFTY": "26009",  # verify in SmartAPI docs
+    "NIFTY": "26000",
+}
+
+def create_connection(api_key: str, client_code: str, password: str, totp: str):
+    obj = SmartConnect(api_key=api_key)
+    session = obj.generateSession(client_code, password, totp)
+    if not session.get("status"):
+        raise RuntimeError(f"SmartAPI login failed: {session}")
+    return obj
+
+def fetch_intraday_candles(conn, underlying: str, interval: str, lookback_minutes: int) -> pd.DataFrame:
+    token = TOKEN_MAP[underlying]
+    to_dt = datetime.now()
+    from_dt = to_dt - timedelta(minutes=lookback_minutes)
+    params = {
+        "exchange": "NSE",
+        "symboltoken": token,
+        "interval": interval,
+        "fromdate": from_dt.strftime("%Y-%m-%d %H:%M"),
+        "todate": to_dt.strftime("%Y-%m-%d %H:%M"),
+    }
+    resp = conn.getCandleData(params)
+    if "data" not in resp or resp["data"] is None:
+        raise RuntimeError(f"No candle data returned: {resp}")
+    data = resp["data"]
+    cols = ["datetime", "open", "high", "low", "close", "volume"]
+    df = pd.DataFrame(data, columns=cols)
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df.set_index("datetime", inplace=True)
+    for c in ["open", "high", "low", "close", "volume"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df.dropna()
+
+# ============================================================================
+# INDICATORS (5 PRO INDICATORS)
+# ============================================================================
+
+def add_vwap(df: pd.DataFrame) -> pd.DataFrame:
+    tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    v = df["volume"].replace(0, np.nan)
+    df["vwap"] = (tp * v).cumsum() / v.cumsum()
+    df["vwap_deviation_pct"] = (df["close"] - df["vwap"]) / df["vwap"] * 100
+    return df
+
+def add_volume_delta(df: pd.DataFrame) -> pd.DataFrame:
+    change = df["close"].diff()
+    sign = np.where(change > 0, 1, np.where(change < 0, -1, 0))
+    df["volume_delta"] = df["volume"] * sign
+    df["cum_volume_delta"] = df["volume_delta"].cumsum()
+    return df
+
+def add_rsi_and_divergence(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
+    rsi = RSIIndicator(close=df["close"], window=window).rsi()
+    df["rsi"] = rsi
+    df["rsi_divergence"] = 0
+    lookback = 20
+    if len(df) >= window + lookback:
+        recent = df.iloc[-lookback:]
+        price_high_idx = recent["close"].idxmax()
+        price_low_idx = recent["close"].idxmin()
+        rsi_at_high = recent.loc[price_high_idx, "rsi"]
+        rsi_before_high = recent["rsi"][:price_high_idx].max()
+        if rsi_at_high < rsi_before_high:
+            df.loc[price_high_idx, "rsi_divergence"] = -1
+        rsi_at_low = recent.loc[price_low_idx, "rsi"]
+        rsi_before_low = recent["rsi"][:price_low_idx].min()
+        if rsi_at_low > rsi_before_low:
+            df.loc[price_low_idx, "rsi_divergence"] = 1
+    return df
+
+def compute_volume_profile(df: pd.DataFrame, bins: int = 20) -> pd.Series:
+    price_bins = pd.cut(df["close"], bins=bins)
+    profile = df.groupby(price_bins)["volume"].sum()
+    return profile
+
+def compute_advance_decline(df: pd.DataFrame):
+    advances = (df["close"] > df["open"]).sum()
+    declines = (df["close"] < df["open"]).sum()
+    total = advances + declines
+    ad_ratio = advances / total if total > 0 else 0.5
+    return {
+        "advances": int(advances),
+        "declines": int(declines),
+        "ad_value": int(advances - declines),
+        "ad_ratio": float(ad_ratio),
+    }
+
+def build_indicator_scores(df: pd.DataFrame):
+    latest = df.iloc[-1]
+    score = 0
+    reasons = []
+
+    if latest["vwap_deviation_pct"] > 0.1:
+        score += 8
+        reasons.append("✓ Price holding above VWAP (bullish bias)")
+    elif latest["vwap_deviation_pct"] < -0.1:
+        score -= 8
+        reasons.append("✗ Price below VWAP (bearish bias)")
+
+    recent_delta = df["volume_delta"].tail(min(10, len(df))).sum()
+    if recent_delta > 0:
+        score += 10
+        reasons.append("✓ Positive volume delta (buyers more aggressive)")
+    elif recent_delta < 0:
+        score -= 10
+        reasons.append("✗ Negative volume delta (sellers more aggressive)")
+
+    if latest["rsi"] < 35:
+        score += 6
+        reasons.append("✓ RSI oversold (potential bounce)")
+    elif latest["rsi"] > 65:
+        score -= 6
+        reasons.append("✗ RSI overbought (risk of exhaustion)")
+
+    if latest.get("rsi_divergence", 0) == 1:
+        score += 12
+        reasons.append("★ Bullish RSI divergence (reversal up)")
+    elif latest.get("rsi_divergence", 0) == -1:
+        score -= 12
+        reasons.append("★ Bearish RSI divergence (reversal down)")
+
+    ad = compute_advance_decline(df)
+    if ad["ad_ratio"] > 0.6:
+        score += 8
+        reasons.append("✓ Strong breadth (advances dominating)")
+    elif ad["ad_ratio"] < 0.4:
+        score -= 8
+        reasons.append("✗ Weak breadth (declines dominating)")
+
+    score = max(-60, min(60, score))
+    return {"tech_score": score, "tech_reasons": reasons, "ad_stats": ad}
+
+# ============================================================================
+# COMBINED SCORING ENGINE (OI + TECH + SBC, MODES)
+# ============================================================================
+
+def combine_scores(oi_score, tech_score, sbc_score, market_type, tithi_name, mode="Scalping"):
+    oi_score = max(0, min(80, oi_score))
+    tech_score = max(-60, min(60, tech_score))
+    sbc_score = max(-25, min(25, sbc_score))
+
+    if mode == "Scalping":
+        w_oi, w_tech, w_sbc = 0.35, 0.50, 0.15
+        mode_bias = 0
+    elif mode == "Intraday":
+        w_oi, w_tech, w_sbc = 0.45, 0.40, 0.15
+        mode_bias = 5
+    else:  # Swing
+        w_oi, w_tech, w_sbc = 0.35, 0.25, 0.40
+        mode_bias = 0
+
+    blended = (
+        w_oi * (oi_score - 40)
+        + w_tech * tech_score
+        + w_sbc * sbc_score
+        + mode_bias
+    )
+
+    if market_type == "RANGE":
+        blended = min(blended, 15)
+    elif market_type == "EXPANSION":
+        blended += 5
+
+    if tithi_name == "Rikta":
+        blended = min(blended, 10)
+    elif tithi_name == "Nanda":
+        blended += 5
+
+    final_score = max(0, min(100, 50 + blended))
+
+    if final_score >= 78:
+        signal = "BUY"
+    elif final_score >= 65:
+        signal = "SCALP"
+    elif final_score >= 52:
+        signal = "WAIT"
+    else:
+        signal = "AVOID"
+
+    confidence = 50 + abs(final_score - 50) * 0.7
+    confidence = max(55, min(98, confidence))
+    return signal, round(final_score), round(confidence)
+
+# ============================================================================
+# MAIN APP
 # ============================================================================
 
 def main():
-    st.title("🌀 AstroQuant Pro V9.0 - Ultimate SBC Edition")
-    st.markdown("### Professional Option Chain Analyzer with Refined Sarvatobhadra Chakra")
-    st.markdown("**🎯 Real-Time Signals | OI Analysis + Vedic Astrology | NIFTY & BANKNIFTY**")
+    st.title("🌀 AstroQuant Pro V10.0 - SmartAPI Edition")
+    st.markdown("**Real-Time Option Chain + Price/Volume + Vedic Astrology (SBC)**")
 
-    # Initialize session state
-    if 'analysis_ready' not in st.session_state:
-        st.session_state['analysis_ready'] = False
-
-    # ========== SIDEBAR CONTROLS ==========
     with st.sidebar:
         st.header("⚙️ Configuration")
-        st.subheader("📊 Data Source")
-        
-        mode = st.radio(
-            "Select Mode:",
-            ["📁 CSV Upload (Manual)", "🔴 LIVE API (Angel Broking)"],
-            help="CSV: Upload clean option chain CSV | LIVE: Real-time from Angel Broking"
+        mode = st.radio("Trading Mode", ["Scalping", "Intraday", "Swing"])
+        data_mode = st.radio("Data Mode", ["CSV + SmartAPI (Live)", "CSV Only"])
+        underlying = st.selectbox("Underlying", ["BANKNIFTY", "NIFTY"])
+        timeframe = st.selectbox(
+            "Spot timeframe",
+            ["ONE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE"],
+            index=1,
+        )
+        lookback = st.slider("Lookback (minutes)", 30, 360, 120, 30)
+
+        st.markdown("---")
+        st.subheader("SmartAPI Login (daily OTP)")
+        api_key = st.text_input("API Key", type="password")
+        client_code = st.text_input("Client Code", type="password")
+        password = st.text_input("Password", type="password")
+        st.caption("Login to Angel, then read 6-digit TOTP from mobile app.")
+        totp = st.text_input("TOTP", type="password")
+
+        st.markdown("---")
+        st.subheader("Option Chain CSV")
+        uploaded_file = st.file_uploader(
+            "Clean option-chain CSV",
+            type=["csv"],
+            help="Strike Price, Call OI, Call OI Change, Put OI, Put OI Change",
         )
 
-        # -------- CSV UPLOAD MODE --------
-        if mode == "📁 CSV Upload (Manual)":
-            st.subheader("📁 Upload Clean Option Chain CSV")
-            st.info("""
-            ✅ **Required CSV Format:**
-            - Columns: Strike Price, Call OI, Call OI Change, Put OI, Put OI Change
-            - No header merging or complex structure
-            - Data starts from row 1
-            """)
-            
-            uploaded_file = st.file_uploader(
-                "Choose clean CSV file",
-                type=['csv'],
-                help="Upload a clean, pre-formatted option chain CSV"
-            )
+        run_btn = st.button("🚀 RUN ANALYSIS", use_container_width=True)
 
-            if uploaded_file is not None:
-                try:
-                    df = pd.read_csv(uploaded_file)
-                    
-                    # Verify required columns
-                    required_cols = ['Strike Price', 'Call OI', 'Call OI Change', 'Put OI', 'Put OI Change']
-                    if all(col in df.columns for col in required_cols):
-                        st.success("✅ CSV loaded successfully!")
-                        
-                        underlying = st.selectbox(
-                            "Select Underlying:",
-                            ["BANKNIFTY", "NIFTY50", "FINNIFTY"],
-                            help="Index to analyze"
-                        )
-                        
-                        spot_price = st.number_input(
-                            "Enter Current Spot Price",
-                            min_value=0.0,
-                            value=50000.0,
-                            step=100.0,
-                            help=f"Current {underlying} price"
-                        )
-                        
-                        if st.button("🚀 ANALYZE NOW", use_container_width=True):
-                            st.session_state['analysis_ready'] = True
-                            st.session_state['df'] = df
-                            st.session_state['spot_price'] = spot_price
-                            st.session_state['underlying'] = underlying
-                            st.session_state['mode'] = 'csv'
-                            st.success(f"✅ Analysis ready for {underlying}")
-                    else:
-                        st.error(f"❌ CSV missing required columns. Found: {list(df.columns)}")
-                        st.info(f"Required: {required_cols}")
-                except Exception as e:
-                    st.error(f"❌ Error reading CSV: {e}")
+    if not run_btn:
+        st.info("Upload CSV, fill SmartAPI credentials (if using live), then click RUN ANALYSIS.")
+        return
+    if uploaded_file is None:
+        st.error("Please upload a clean option-chain CSV.")
+        return
 
-        # -------- ANGEL BROKING LIVE MODE --------
-        else:
-            st.subheader("🔴 Angel Broking Live API")
-            st.info("""
-            ⚠️ **Angel Broking Integration Coming Soon!**
-            
-            Features to implement:
-            - Real-time option chain data
-            - Automatic 30-sec refresh
-            - Live trading signals
-            - Auto trade execution (optional)
-            """)
-            
-            st.markdown("""
-            **To enable live trading:**
-            1. Get Angel Broking Account
-            2. Generate API credentials
-            3. Enter credentials below
-            """)
-            
-            client_code = st.text_input("AAAQ573450", type="default")
-            api_key = st.text_input("W7aGx1Bh", type="default")
-            
-            if st.button("🔗 Connect to Angel Broking", use_container_width=True):
-                st.warning("⏳ API Integration in Progress - Check back soon!")
+    # ---- OPTION CHAIN SECTION ----
+    df_oc = pd.read_csv(uploaded_file)
+    for col in ["Strike Price", "Call OI", "Call OI Change", "Put OI", "Put OI Change"]:
+        if col not in df_oc.columns:
+            st.error(f"CSV missing required column: {col}")
+            return
 
-    # ========== ANALYSIS DISPLAY ==========
-    if st.session_state.get('analysis_ready'):
-        df = st.session_state['df']
-        spot_price = st.session_state.get('spot_price', 50000.0)
-        underlying = st.session_state.get('underlying', 'BANKNIFTY')
+    for col in ["Strike Price", "Call OI", "Call OI Change", "Put OI", "Put OI Change"]:
+        df_oc[col] = pd.to_numeric(df_oc[col], errors="coerce")
+    df_oc = df_oc.dropna(subset=["Strike Price"])
+    df_oc = df_oc.sort_values("Strike Price").reset_index(drop=True)
 
-        analyzer = OptionChainAnalyzer(df)
-        analyzer.spot_price = spot_price
-        analyzer.calculate_max_pain()
-        analyzer.calculate_pcr()
+    analyzer = OptionChainAnalyzer(df_oc)
+    spot_price = float(df_oc["Strike Price"].median())
+    spot_price = st.number_input("Spot Price (override if needed)", value=spot_price, step=100.0)
+    analyzer.spot_price = spot_price
+    analyzer.calculate_max_pain()
+    analyzer.calculate_pcr()
+    market_type = analyzer.detect_market_type()
 
-        # BUILD SBC CONTEXT (V9.0)
-        index_nakshatra = get_market_nakshatra(spot_price)
-        moon_nakshatra = index_nakshatra
-        tithi_name, tithi_num = get_tithi_info()
-        
-        sbc_context = {
-            "moon_nakshatra": moon_nakshatra,
-            "index_nakshatra": index_nakshatra,
-            "tithi_name": tithi_name,
-            "weekday": datetime.now().weekday(),
-            "planetary_vedhas": []
+    index_nakshatra = get_market_nakshatra(spot_price)
+    moon_nakshatra = index_nakshatra
+    tithi_name, tithi_num = get_tithi_info()
+    sbc_context = {
+        "moon_nakshatra": moon_nakshatra,
+        "index_nakshatra": index_nakshatra,
+        "tithi_name": tithi_name,
+        "weekday": datetime.now().weekday(),
+        "planetary_vedhas": [],
+    }
+
+    oc_signal = analyzer.generate_signal(sbc_context=sbc_context)
+    oi_score = oc_signal["base_score"]
+    sbc_score = oc_signal["sbc_score"]
+
+    # ---- PRICE/VOLUME SECTION (SMARTAPI) ----
+    candles = None
+    tech_block = {"tech_score": 0, "tech_reasons": [], "ad_stats": None}
+    if data_mode == "CSV + SmartAPI (Live)":
+        try:
+            conn = create_connection(api_key, client_code, password, totp)
+            candles = fetch_intraday_candles(conn, underlying, timeframe, lookback)
+            candles = add_vwap(candles)
+            candles = add_volume_delta(candles)
+            candles = add_rsi_and_divergence(candles)
+            tech_block = build_indicator_scores(candles)
+        except Exception as e:
+            st.error(f"SmartAPI / indicator error: {e}")
+
+    tech_score = tech_block["tech_score"]
+    final_signal, final_score, final_conf = combine_scores(
+        oi_score=oi_score,
+        tech_score=tech_score,
+        sbc_score=sbc_score,
+        market_type=market_type,
+        tithi_name=tithi_name,
+        mode=mode,
+    )
+
+    # ---- METRICS ROW ----
+    st.markdown("---")
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    with c1:
+        st.metric("Spot", f"{spot_price:,.0f}")
+    with c2:
+        st.metric("Max Pain", f"{analyzer.max_pain:,.0f}" if analyzer.max_pain else "N/A")
+    with c3:
+        st.metric("PCR", f"{analyzer.pcr:.2f}")
+    with c4:
+        st.metric("Market Type", market_type)
+    with c5:
+        st.metric("Mode", mode.upper())
+    with c6:
+        st.metric("Strikes", len(df_oc))
+    st.markdown("---")
+
+    tab_signal, tab_structure, tab_oi, tab_pv, tab_sbc, tab_pro = st.tabs(
+        ["🎯 Signal", "📊 Structure", "📈 OI", "📉 Price & Volume", "🌀 SBC (V10)", "💡 Pro Strategy"]
+    )
+
+    # ---- TAB 1: SIGNAL ----
+    with tab_signal:
+        st.subheader("🎯 Final Trading Signal")
+        signal_colors = {
+            "BUY": ("🟢", "buy-signal"),
+            "SCALP": ("🟢", "buy-signal"),
+            "WAIT": ("🟡", "wait-signal"),
+            "AVOID": ("🔴", "avoid-signal"),
         }
+        icon, _ = signal_colors[final_signal]
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            st.metric("Signal", f"{icon} {final_signal}")
+        with s2:
+            st.metric("Score", f"{final_score}/100")
+        with s3:
+            st.metric("Confidence", f"{final_conf}%")
 
-        # GENERATE SIGNAL (V9.0)
-        signal_result = analyzer.generate_signal(sbc_context=sbc_context)
+        st.markdown("---")
+        st.subheader("Score Breakdown")
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            st.metric("OI Base Score", f"{oi_score:.0f}")
+        with b2:
+            st.metric("Tech Score", f"{tech_score:.0f}")
+        with b3:
+            st.metric("SBC Score", f"{sbc_score:.0f}")
+
+        st.markdown("---")
+        st.subheader("Key Reasons (OI + SBC + Technical)")
+        for r in oc_signal["reasons"]:
+            st.write("•", r)
+        for r in tech_block["tech_reasons"]:
+            st.write("•", r)
+
+    # ---- TAB 2: STRUCTURE ----
+    with tab_structure:
+        st.subheader("📊 Market Structure")
         support, resistance = analyzer.get_support_resistance()
-
-        # ========== KEY METRICS ==========
-        st.markdown("---")
-        col1, col2, col3, col4, col5 = st.columns(5)
-        with col1:
-            st.metric("Spot Price", f"{spot_price:,.0f}")
-        with col2:
-            st.metric("Max Pain", f"{analyzer.max_pain:,.0f}" if analyzer.max_pain else "N/A")
-        with col3:
-            st.metric("PCR", f"{analyzer.pcr:.2f}" if analyzer.pcr else "N/A")
-        with col4:
-            st.metric("Market Type", analyzer.detect_market_type())
-        with col5:
-            st.metric("Total Strikes", len(df))
-        st.markdown("---")
-
-        # ========== ANALYSIS TABS ==========
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "🎯 Signal",
-            "📊 Structure",
-            "🔍 OI Analysis",
-            "📋 Data",
-            "🌀 SBC (V9.0)",
-            "💡 Combined Strategy"
-        ])
-
-        # -------- TAB 1: SIGNAL --------
-        with tab1:
-            st.subheader("🎯 OI-Based Trading Signal")
-            
-            signal_colors = {"BUY": "🟢", "WAIT": "🟡", "AVOID": "🔴"}
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Signal", f"{signal_colors[signal_result['signal']]} {signal_result['signal']}")
-            with col2:
-                st.metric("Score", f"{signal_result['score']}/100")
-            with col3:
-                st.metric("Confidence", f"{signal_result['confidence']:.0f}%")
-            
-            st.markdown("---")
-            st.subheader("📋 Analysis Details")
-            for reason in signal_result['reasons']:
-                if '✓' in reason or 'Pushya' in reason or 'Nanda' in reason:
-                    st.success(reason)
-                elif '✗' in reason or 'AVOID' in reason:
-                    st.error(reason)
-                else:
-                    st.info(reason)
-
-            if signal_result['best_strike']:
-                st.markdown("---")
-                st.subheader("🎯 Recommended Strike")
-                strike_info = signal_result['best_strike']
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Strike", f"{strike_info['strike']:.0f} {strike_info['type']}")
-                with col2:
-                    st.metric("OI Change", f"{strike_info['oi_change']:,.0f}")
-                with col3:
-                    st.metric("Total OI", f"{strike_info['oi']:,.0f}")
-
-        # -------- TAB 2: STRUCTURE --------
-        with tab2:
-            st.subheader("📊 Price Structure - Support & Resistance")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Resistance (Call OI Max)", f"{resistance:,.0f}" if resistance else "N/A")
-            with col2:
-                st.metric("Support (Put OI Max)", f"{support:,.0f}" if support else "N/A")
-            
-            st.markdown("---")
-            st.write("**Full Strike Price Distribution:**")
-            st.dataframe(df[['Strike Price', 'Call OI', 'Put OI']].sort_values('Strike Price'))
-
-        # -------- TAB 3: OI ANALYSIS --------
-        with tab3:
-            st.subheader("🔍 Open Interest Analysis")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Total Call OI", f"{df['Call OI'].sum():,.0f}")
-            with col2:
-                st.metric("Total Put OI", f"{df['Put OI'].sum():,.0f}")
-            
-            st.markdown("---")
-            
-            if PLOTLY_AVAILABLE:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    x=df['Strike Price'], y=df['Call OI'],
-                    name='Call OI', marker_color='red'
-                ))
-                fig.add_trace(go.Bar(
-                    x=df['Strike Price'], y=df['Put OI'],
-                    name='Put OI', marker_color='green'
-                ))
-                fig.update_layout(
-                    title='OI Distribution Across Strikes',
-                    barmode='group', height=500
-                )
-                st.plotly_chart(fig, use_container_width=True)
+        cs1, cs2 = st.columns(2)
+        with cs1:
+            if support is not None and not (isinstance(support, float) and math.isnan(support)):
+                st.metric("Support (Put OI Max)", f"{support:,.0f}")
             else:
-                st.warning("Install plotly for charts: pip install plotly")
+                st.metric("Support (Put OI Max)", "N/A")
+        with cs2:
+            if resistance is not None and not (isinstance(resistance, float) and math.isnan(resistance)):
+                st.metric("Resistance (Call OI Max)", f"{resistance:,.0f}")
+            else:
+                st.metric("Resistance (Call OI Max)", "N/A")
 
-        # -------- TAB 4: DATA --------
-        with tab4:
-            st.subheader("📋 Full Option Chain Data")
-            
-            st.write(f"**Total Strikes: {len(df)}**")
-            st.dataframe(df, use_container_width=True, height=600)
-            
-            # Download button
-            csv_data = df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download CSV",
-                data=csv_data,
-                file_name=f"option_chain_{underlying}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
+        st.markdown("---")
+        fig = go.Figure()
+        fig.add_bar(x=df_oc["Strike Price"], y=df_oc["Call OI"], name="Call OI", marker_color="indianred")
+        fig.add_bar(x=df_oc["Strike Price"], y=df_oc["Put OI"], name="Put OI", marker_color="seagreen")
+        fig.update_layout(
+            barmode="group",
+            height=400,
+            xaxis_title="Strike",
+            yaxis_title="Open Interest",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        if candles is not None:
+            st.markdown("---")
+            st.write("**Volume Profile (spot close)**")
+            profile = compute_volume_profile(candles, bins=20)
+            fig2 = go.Figure()
+            fig2.add_bar(
+                y=[f"{i.left:.0f}-{i.right:.0f}" for i in profile.index],
+                x=profile.values,
+                orientation="h",
+                marker_color="steelblue",
             )
+            fig2.update_layout(height=500, xaxis_title="Volume", yaxis_title="Price Range")
+            st.plotly_chart(fig2, use_container_width=True)
 
-        # -------- TAB 5: SBC ASTROLOGY --------
-        with tab5:
-            st.subheader("🌀 Surya-Brahma-Chandra (SBC) Analysis")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Moon Nakshatra", sbc_context['moon_nakshatra'])
-            with col2:
-                st.metric("Index Nakshatra", sbc_context['index_nakshatra'])
-            with col3:
-                st.metric("Tithi", sbc_context['tithi_name'])
-            
-            st.markdown("---")
-            st.write("**SBC Signal Components:**")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("OI Base Score", signal_result['base_score'])
-            with col2:
-                st.metric("SBC Score", signal_result['sbc_score'])
+    # ---- TAB 3: OI ----
+    with tab_oi:
+        st.subheader("📈 Open Interest Analysis")
+        o1, o2 = st.columns(2)
+        with o1:
+            st.metric("Total Call OI", f"{df_oc['Call OI'].sum():,.0f}")
+        with o2:
+            st.metric("Total Put OI", f"{df_oc['Put OI'].sum():,.0f}")
 
-        # -------- TAB 6: COMBINED STRATEGY --------
-        with tab6:
-            st.subheader("💡 Combined Recommendation")
-            
-            if signal_result['signal'] == 'BUY':
-                st.markdown('<div class="buy-signal">🟢 BUY SIGNAL</div>', unsafe_allow_html=True)
-            elif signal_result['signal'] == 'WAIT':
-                st.markdown('<div class="wait-signal">🟡 WAIT FOR CONFIRMATION</div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="avoid-signal">🔴 AVOID - NO TRADE ZONE</div>', unsafe_allow_html=True)
-            
-            st.markdown("---")
-            st.write(f"**Action:** {signal_result['action']}")
-            st.write(f"**Market Type:** {signal_result['market_type']}")
-            st.write(f"**Confidence:** {signal_result['confidence']:.0f}%")
+        fig3 = go.Figure()
+        fig3.add_bar(
+            x=df_oc["Strike Price"],
+            y=df_oc["Call OI Change"],
+            name="Call OI Change",
+            marker_color="salmon",
+        )
+        fig3.add_bar(
+            x=df_oc["Strike Price"],
+            y=df_oc["Put OI Change"],
+            name="Put OI Change",
+            marker_color="lightgreen",
+        )
+        fig3.update_layout(
+            barmode="group",
+            height=400,
+            xaxis_title="Strike",
+            yaxis_title="OI Change",
+        )
+        st.plotly_chart(fig3, use_container_width=True)
+
+        st.markdown("---")
+        st.dataframe(df_oc, use_container_width=True, height=400)
+
+    # ---- TAB 4: PRICE & VOLUME ----
+    with tab_pv:
+        st.subheader("📉 Price, VWAP, Volume & RSI")
+        if candles is None:
+            st.info("Connect SmartAPI (CSV + SmartAPI mode) to see price/volume charts.")
+        else:
+            fig_p = go.Figure()
+            fig_p.add_candlestick(
+                x=candles.index,
+                open=candles["open"],
+                high=candles["high"],
+                low=candles["low"],
+                close=candles["close"],
+                name="Price",
+            )
+            fig_p.add_scatter(
+                x=candles.index,
+                y=candles["vwap"],
+                name="VWAP",
+                line=dict(color="orange", width=2),
+            )
+            fig_p.update_layout(height=450, xaxis_title="Time", yaxis_title="Price")
+            st.plotly_chart(fig_p, use_container_width=True)
+
+            fig_v = go.Figure()
+            fig_v.add_bar(x=candles.index, y=candles["volume"], name="Volume", marker_color="lightgrey")
+            fig_v.add_bar(x=candles.index, y=candles["volume_delta"], name="Volume Delta", marker_color="teal")
+            fig_v.update_layout(
+                barmode="overlay",
+                height=300,
+                xaxis_title="Time",
+                yaxis_title="Volume / Delta",
+            )
+            st.plotly_chart(fig_v, use_container_width=True)
+
+            fig_r = go.Figure()
+            fig_r.add_scatter(x=candles.index, y=candles["rsi"], name="RSI", line=dict(color="purple"))
+            fig_r.add_hline(y=30, line_dash="dash", line_color="grey")
+            fig_r.add_hline(y=70, line_dash="dash", line_color="grey")
+
+            bull_idx = candles.index[candles["rsi_divergence"] == 1]
+            bear_idx = candles.index[candles["rsi_divergence"] == -1]
+            fig_r.add_scatter(
+                x=bull_idx,
+                y=candles.loc[bull_idx, "rsi"],
+                mode="markers",
+                marker=dict(color="green", size=9),
+                name="Bullish Div",
+            )
+            fig_r.add_scatter(
+                x=bear_idx,
+                y=candles.loc[bear_idx, "rsi"],
+                mode="markers",
+                marker=dict(color="red", size=9),
+                name="Bearish Div",
+            )
+            fig_r.update_layout(height=300, xaxis_title="Time", yaxis_title="RSI")
+            st.plotly_chart(fig_r, use_container_width=True)
+
+    # ---- TAB 5: SBC ----
+    with tab_sbc:
+        st.subheader("🌀 Surya-Brahma-Chandra (SBC) Analysis – V10")
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            st.metric("Moon Nakshatra", moon_nakshatra)
+        with s2:
+            st.metric("Index Nakshatra", index_nakshatra)
+        with s3:
+            st.metric("Tithi", f"{tithi_name} ({tithi_num})")
+
+        st.markdown("---")
+        st.write("**SBC Signal Components:**")
+        st.write(f"• SBC Score: {sbc_score:.0f}")
+        for r in [x for x in oc_signal["reasons"] if "tithi" in x.lower() or "nakshatra" in x.lower()]:
+            st.write("•", r)
+        st.caption("Swing mode gives higher weight to SBC score.")
+
+    # ---- TAB 6: PRO STRATEGY ----
+    with tab_pro:
+        st.subheader("💡 Pro Strategy Playbook")
+
+        st.write(f"**Final Signal:** {final_signal} (Score {final_score}/100, {final_conf}% confidence)")
+        st.write(f"**Mode:** {mode.upper()} | **Market Type:** {market_type} | **Tithi:** {tithi_name}")
+
+        st.markdown("---")
+        st.write("### Entry Rules")
+        if final_signal in ("BUY", "SCALP"):
+            st.write("• Enter in direction of signal when price respects VWAP and OI also supports move.")
+            st.write("• Avoid fresh entries in RANGE market type or on Rikta tithi.")
+        elif final_signal == "WAIT":
+            st.write("• Wait for either VWAP breakout with positive volume delta or clear OI breakout.")
+        else:
+            st.write("• Stay in cash. Preserve capital until structure and indicators align.")
+
+        st.write("### Stop-Loss & Targets")
+        if mode == "Scalping":
+            st.write("• Stop-loss: 0.3–0.5% on spot / 30–60 points on BANKNIFTY.")
+            st.write("• Target: 1–1.5× risk, exit quickly on RSI extremes.")
+        elif mode == "Intraday":
+            st.write("• Stop-loss: below last swing low/high or key VWAP band.")
+            st.write("• Target: 2× risk; trail using VWAP and OI shifts.")
+        else:
+            st.write("• Use higher timeframe levels; hold across sessions only when SBC + tech strongly aligned.")
+            st.write("• Re-evaluate on new tithi / major gap openings.")
 
 if __name__ == "__main__":
     main()
