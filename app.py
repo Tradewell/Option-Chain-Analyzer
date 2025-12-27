@@ -286,7 +286,7 @@ class OptionChainAnalyzer:
 # ============================================================================
 
 TOKEN_MAP = {
-    "BANKNIFTY": "26009",  # verify in SmartAPI docs
+    "BANKNIFTY": "26009",
     "NIFTY": "26000",
 }
 
