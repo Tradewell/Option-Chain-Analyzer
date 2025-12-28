@@ -1,3 +1,9 @@
+try:
+    import plotly
+    print(f"Plotly version: {plotly.__version__}")
+except ImportError as e:
+    print(f"Plotly import failed: {e}")
+    raise
 import math
 from datetime import datetime, timedelta
 
