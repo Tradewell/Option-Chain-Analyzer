@@ -1,9 +1,11 @@
+# In your requirements.txt, add a comment at the end:
 streamlit==1.29.0
 pandas==2.1.4
 numpy==1.26.2
 plotly==5.18.0
 ta==0.11.0
 smartapi-python==1.3.7
+# Updated 2025-12-28
 
 
 
