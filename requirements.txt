@@ -3,4 +3,4 @@ pandas==2.1.4
 numpy==1.26.2
 plotly==5.18.0
 ta==0.11.0
-smartapi-python==1.2.7
+git+https://github.com/angelbroking-github/smartapi-python.git@v1.3.7
