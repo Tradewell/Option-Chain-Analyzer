@@ -1,3 +1,11 @@
+# Try to import smartapi, if not found, show error
+try:
+    from smartapi import SmartConnect
+    SMARTAPI_AVAILABLE = True
+except ImportError:
+    SMARTAPI_AVAILABLE = False
+    st.error("❌ SmartAPI not found. Please add 'smartapi-python==1.3.7' to requirements.txt")
+    st.stop()
 try:
     import plotly
     print(f"Plotly version: {plotly.__version__}")
@@ -309,7 +317,20 @@ class OptionChainAnalyzer:
 # ============================================================================
 # SMARTAPI CONNECTOR (CANDLES)
 # ============================================================================
-
+def create_connection(api_key: str, client_code: str, password: str, totp: str):
+    if not SMARTAPI_AVAILABLE:
+        st.error("SmartAPI package not installed. Cannot connect.")
+        return None
+    
+    try:
+        obj = SmartConnect(api_key=api_key)
+        session = obj.generateSession(client_code, password, totp)
+        if not session.get("status"):
+            raise RuntimeError(f"SmartAPI login failed: {session}")
+        return obj
+    except Exception as e:
+        st.error(f"SmartAPI connection error: {e}")
+        return None
 TOKEN_MAP = {
     "BANKNIFTY": "26009",
     "NIFTY": "26000",
